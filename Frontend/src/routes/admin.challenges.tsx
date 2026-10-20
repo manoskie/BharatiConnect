@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +44,7 @@ function AdminChallenges() {
     rewardPoints: "200",
     endsOn: iso(daysAgo(-30)),
   });
+  const [saving, setSaving] = useState(false);
 
   return (
     <AdminShell title={t("admin.challenges")}>
@@ -113,17 +115,26 @@ function AdminChallenges() {
           </div>
           <Button
             className="h-11 w-full"
-            disabled={!form.titleEn || !form.titleMr}
-            onClick={() =>
-              actions.saveChallenge({
+            disabled={saving || !form.titleEn.trim() || !form.titleMr.trim()}
+            onClick={async () => {
+              setSaving(true);
+              try {
+                await actions.saveChallenge({
                 titleEn: form.titleEn,
                 titleMr: form.titleMr,
                 type: form.type,
                 target: Number(form.target),
                 rewardPoints: Number(form.rewardPoints),
                 endsOn: form.endsOn,
-              })
-            }
+                });
+                setForm({ ...form, titleEn: "", titleMr: "" });
+                toast.success("Challenge saved.");
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "Unable to save challenge.");
+              } finally {
+                setSaving(false);
+              }
+            }}
           >
             {t("common.save")}
           </Button>

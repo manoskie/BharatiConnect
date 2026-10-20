@@ -6,11 +6,11 @@ import {
   Building2,
   CalendarDays,
   ChevronLeft,
+  ChevronRight,
   FileText,
   Gauge,
   Image,
   LogOut,
-  Menu,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -20,7 +20,6 @@ import {
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { LangThemeToggle } from "@/components/LangThemeToggle";
-import { PortalSwitch } from "@/components/PortalSwitch";
 import { DemoBadge } from "@/components/DemoBadge";
 import { actions, useAppState } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -29,6 +28,7 @@ const items = [
   { to: "/admin", icon: Gauge, key: "admin.dashboard", exact: true },
   { to: "/admin/staff", icon: Users, key: "admin.staff" },
   { to: "/admin/departments", icon: Building2, key: "admin.departments" },
+  { to: "/admin/books", icon: BookOpen, key: "admin.books" },
   { to: "/admin/analytics", icon: BookOpen, key: "admin.analytics" },
   { to: "/admin/proof", icon: Image, key: "admin.proof" },
   { to: "/admin/challenges", icon: Target, key: "admin.challenges" },
@@ -55,10 +55,17 @@ export function AdminShell({ title, children }: { title: string; children: React
           collapsed ? "w-16" : "w-64",
         )}
       >
-        <div className="flex items-center gap-2 p-4">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <BookOpen className="size-4" />
-          </span>
+        <div
+          className={cn(
+            "relative flex items-center gap-2 p-4",
+            collapsed && "justify-center p-2",
+          )}
+        >
+          {!collapsed && (
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+              <BookOpen className="size-4" />
+            </span>
+          )}
           {!collapsed && (
             <div className="min-w-0">
               <p className="truncate text-sm font-bold">{t("app.name")}</p>
@@ -68,11 +75,12 @@ export function AdminShell({ title, children }: { title: string; children: React
           <Button
             variant="ghost"
             size="icon"
-            className="ml-auto"
+            className={cn("z-30 shrink-0", collapsed ? "size-10" : "ml-auto")}
             onClick={() => setCollapsed(!collapsed)}
             aria-label="Toggle sidebar"
+            aria-expanded={!collapsed}
           >
-            {collapsed ? <Menu className="size-4" /> : <ChevronLeft className="size-4" />}
+            {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
           </Button>
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto px-2 pb-4">
@@ -114,7 +122,6 @@ export function AdminShell({ title, children }: { title: string; children: React
           <h1 className="text-lg font-semibold">{title}</h1>
           <div className="flex items-center gap-2">
             <DemoBadge />
-            <PortalSwitch />
             <LangThemeToggle />
           </div>
         </header>

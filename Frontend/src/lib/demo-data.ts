@@ -459,8 +459,8 @@ export const auditLog: AuditEntry[] = [
 ];
 
 export const settings: Settings = {
-  minimumPages: 10,
-  proofMode: "optional",
+  minimumPages: 1,
+  proofMode: "off",
   freezesPerWeek: 1,
   reminderTime: "07:30",
   nudgeTime: "20:30",

@@ -3,7 +3,6 @@ import { useEffect } from "react";
 import { BookOpen, Home, Newspaper, Trophy, User as UserIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
-import { PortalSwitch } from "@/components/PortalSwitch";
 import { LangThemeToggle } from "@/components/LangThemeToggle";
 import { NotificationBell } from "@/components/staff/NotificationBell";
 import { Celebration } from "@/components/Celebration";
@@ -21,17 +20,17 @@ const tabs = [
 
 export function StaffShell({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
-  const { sessionUser } = useAppState();
+  const { authReady, sessionUser } = useAppState();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   useEffect(() => {
-    if (!sessionUser) {
+    if (authReady && !sessionUser) {
       void navigate({ to: "/login" });
     }
-  }, [sessionUser, navigate]);
+  }, [authReady, sessionUser, navigate]);
 
-  if (!sessionUser) {
+  if (!authReady || !sessionUser) {
     return null;
   }
 
@@ -48,9 +47,6 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
             <LangThemeToggle />
             <NotificationBell />
           </div>
-        </div>
-        <div className="mx-auto flex max-w-2xl justify-center px-4 pb-2">
-          <PortalSwitch />
         </div>
       </header>
 

@@ -46,7 +46,7 @@ export function BookDetailDialog({
                   {book.totalPages} {t("common.pages")}
                 </p>
                 <p className="text-muted-foreground">
-                  {book.language === "mr" ? "मराठी" : "English"}
+                  {book.language === "mr" ? "मराठी" : book.language === "hi" ? "हिन्दी" : "English"}
                 </p>
                 <Progress
                   value={(book.currentPage / book.totalPages) * 100}
@@ -60,8 +60,14 @@ export function BookDetailDialog({
               <Select
                 value={book.status}
                 onValueChange={(v) => {
-                  const ok = actions.setBookStatus(book.id, v as BookStatus);
-                  if (!ok) toast.error(t("reading.readingLimit"));
+                  void actions
+                    .setBookStatus(book.id, v as BookStatus)
+                    .then((ok) => {
+                      if (!ok) toast.error(t("reading.readingLimit"));
+                    })
+                    .catch((error: unknown) => {
+                      toast.error(error instanceof Error ? error.message : "Unable to update this book.");
+                    });
                 }}
               >
                 <SelectTrigger className="h-12">
@@ -83,7 +89,11 @@ export function BookDetailDialog({
                     <button
                       key={n}
                       aria-label={`${n} star`}
-                      onClick={() => actions.rateBook(book.id, n, review)}
+                      onClick={() =>
+                        void actions.rateBook(book.id, n, review).catch((error: unknown) =>
+                          toast.error(error instanceof Error ? error.message : "Unable to save book rating."),
+                        )
+                      }
                       className="touch-target"
                     >
                       <Star
@@ -106,8 +116,11 @@ export function BookDetailDialog({
                 <Button
                   className="h-12 w-full"
                   onClick={() => {
-                    actions.rateBook(book.id, book.rating ?? 5, review);
-                    toast.success(t("common.save"));
+                    void actions.rateBook(book.id, book.rating ?? 5, review)
+                      .then(() => toast.success(t("common.save")))
+                      .catch((error: unknown) =>
+                        toast.error(error instanceof Error ? error.message : "Unable to save book review."),
+                      );
                   }}
                 >
                   {t("common.save")}

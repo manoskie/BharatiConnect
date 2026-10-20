@@ -1,20 +1,35 @@
 import {
   collection,
+  arrayUnion,
   doc,
   getDoc,
-  getDocs,
+  runTransaction,
   setDoc,
   updateDoc,
   deleteDoc,
+  getDocs,
   onSnapshot,
   query,
   limit,
+  where,
+  writeBatch,
+  type Unsubscribe,
 } from "firebase/firestore";
-import { db, handleFirestoreError, OperationType } from "./firebase";
+import {
+  auth,
+  createInvitedAuthAccount,
+  db,
+  firebaseConfigured,
+  handleFirestoreError,
+  OperationType,
+} from "./firebase";
 import * as demo from "./demo-data";
 import type {
+  AuditEntry,
+  AppNotification,
   Book,
   Challenge,
+  CuratedBook,
   Department,
   HolidayEntry,
   Notice,
@@ -27,74 +42,185 @@ import type {
   WeeklyTakeaway,
 } from "./types";
 
-export async function seedFirestoreIfEmpty() {
-  if (typeof window === "undefined") return;
-  const settingsRef = doc(db, "settings", "habitRules");
+export function getDateInIndia(offsetDays = 0): string {
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const date = new Date(`${today}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+}
+
+export async function fsGetAdminRole(uid: string): Promise<"admin" | "owner" | null> {
+  const path = `admins/${uid}`;
   try {
-    const snap = await getDoc(settingsRef);
-    if (snap.exists()) {
-      return; // Already initialized
+    const snapshot = await getDoc(doc(db, "admins", uid));
+    if (!snapshot.exists()) return null;
+    const role = snapshot.data()["role"];
+    if (role !== "admin" && role !== "owner") {
+      throw new Error(`Invalid administrator role in ${path}. Set role to "admin" or "owner".`);
     }
-  } catch (err) {
-    console.warn("Could not check settings seed existence:", err);
-  }
-
-  try {
-    // Seed settings
-    await setDoc(doc(db, "settings", "habitRules"), demo.settings);
-
-    // Seed departments
-    for (const d of demo.departments) {
-      await setDoc(doc(db, "departments", d.id), d);
-    }
-
-    // Seed books
-    for (const b of demo.books) {
-      await setDoc(doc(db, "books", b.id), b);
-    }
-
-    // Seed challenges
-    for (const c of demo.challenges) {
-      await setDoc(doc(db, "challenges", c.id), c);
-    }
-
-    // Seed notices
-    for (const n of demo.notices) {
-      await setDoc(doc(db, "notices", n.id), n);
-    }
-
-    // Seed posts
-    for (const p of demo.posts) {
-      await setDoc(doc(db, "posts", p.id), p);
-    }
-
-    // Seed videos
-    for (const v of demo.videos) {
-      await setDoc(doc(db, "videos", v.id), v);
-    }
-
-    // Seed suggestions
-    for (const s of demo.suggestions) {
-      await setDoc(doc(db, "suggestions", s.id), s);
-    }
-
-    // Seed holidays
-    for (const h of demo.holidays) {
-      await setDoc(doc(db, "holidays", h.id), h);
-    }
-
-    // Seed initial users
-    for (const u of demo.staff) {
-      await setDoc(doc(db, "users", u.id), u);
-    }
-    console.log("Firestore successfully seeded with initial BharatiConnect data.");
+    return role;
   } catch (error) {
-    console.warn("Seed skipped or partially applied:", error);
+    handleFirestoreError(error, OperationType.GET, path);
   }
 }
 
-export function subscribeToFirestore(updateState: (partial: any) => void) {
-  if (typeof window === "undefined") return () => {};
+export async function fsGetUser(uid: string): Promise<User | null> {
+  const path = `users/${uid}`;
+  try {
+    const snapshot = await getDoc(doc(db, "users", uid));
+    return snapshot.exists() ? (snapshot.data() as User) : null;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function fsCreateInvitedUser(input: {
+  name: string;
+  email: string;
+  phone: string;
+  departmentId: string;
+  role: "staff" | "admin";
+}): Promise<User> {
+  const actor = auth.currentUser;
+  if (!actor) throw new Error("Sign in as an administrator before creating accounts.");
+  const actorRole = await fsGetAdminRole(actor.uid);
+  if (!actorRole || (input.role === "admin" && actorRole !== "owner")) {
+    throw new Error(input.role === "admin" ? "Only the owner can invite administrators." : "Administrator access is required.");
+  }
+
+  const date = getDateInIndia();
+  let createdUid: string | null = null;
+  const writeProfile = async (uid: string, email: string) => {
+    createdUid = uid;
+    const user: User = {
+      id: uid,
+      name: input.name.trim(),
+      email,
+      phone: input.phone.trim(),
+      role: input.role,
+      departmentId: input.departmentId,
+      active: true,
+      streak: 0,
+      points: 0,
+      level: 1,
+      language: "mr",
+      reminderTime: "07:30",
+      joinedAt: date,
+      avatarColor: "#6366f1",
+    };
+    const batch = writeBatch(db);
+    batch.set(doc(db, "users", uid), user);
+    if (input.role === "admin") batch.set(doc(db, "admins", uid), { role: "admin" });
+    await batch.commit();
+    return user;
+  };
+  const rollback = async (uid: string) => {
+    const batch = writeBatch(db);
+    batch.update(doc(db, "users", uid), { active: false });
+    if (input.role === "admin") batch.delete(doc(db, "admins", uid));
+    await batch.commit();
+  };
+
+  try {
+    return await createInvitedAuthAccount(input.email, input.name, writeProfile, rollback);
+  } catch (error) {
+    if (createdUid) {
+      console.error(`Firebase invitation setup failed for account ${createdUid}.`);
+    }
+    throw error;
+  }
+}
+
+export async function fsChangeUserRole(uid: string, role: "staff" | "admin") {
+  const actor = auth.currentUser;
+  if (!actor || (await fsGetAdminRole(actor.uid)) !== "owner") {
+    throw new Error("Only the owner can change administrator access.");
+  }
+  const batch = writeBatch(db);
+  batch.update(doc(db, "users", uid), { role });
+  if (role === "admin") batch.set(doc(db, "admins", uid), { role: "admin" });
+  else batch.delete(doc(db, "admins", uid));
+  await batch.commit();
+}
+
+export class ReadingCheckInError extends Error {}
+
+export function fsSubscribeCuratedBooks(
+  onBooks: (books: CuratedBook[]) => void,
+  onError: (error: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    query(collection(db, "books"), limit(200)),
+    (snapshot) => {
+      onBooks(snapshot.docs.map((bookDoc) => ({ ...bookDoc.data(), id: bookDoc.id }) as CuratedBook));
+    },
+    (error) => onError(error),
+  );
+}
+
+export async function fsCreateCuratedBook(
+  book: Omit<CuratedBook, "id" | "createdBy"> & { googleBooksId?: string },
+): Promise<CuratedBook> {
+  const user = auth.currentUser;
+  if (!user || !(await fsGetAdminRole(user.uid))) {
+    throw new Error("Administrator access is required to curate books.");
+  }
+  if (!book.title.trim() || !book.author.trim() || !Number.isInteger(book.totalPages) || book.totalPages < 1) {
+    throw new Error("Enter a title, author, and positive whole-number page count.");
+  }
+
+  const id = book.googleBooksId ? `google_${book.googleBooksId}` : crypto.randomUUID();
+  const ref = doc(db, "books", id);
+  const curatedBook: CuratedBook = {
+    ...book,
+    id,
+    title: book.title.trim(),
+    author: book.author.trim(),
+    coverUrl: book.coverUrl.trim(),
+    createdBy: user.uid,
+  };
+  await runTransaction(db, async (transaction) => {
+    if ((await transaction.get(ref)).exists()) {
+      throw new Error("This Google Books title has already been added to the catalogue.");
+    }
+    transaction.set(ref, {
+      title: curatedBook.title,
+      author: curatedBook.author,
+      totalPages: curatedBook.totalPages,
+      language: curatedBook.language,
+      coverUrl: curatedBook.coverUrl,
+      ...(curatedBook.googleBooksId ? { googleBooksId: curatedBook.googleBooksId } : {}),
+      staffPick: curatedBook.staffPick,
+      createdBy: curatedBook.createdBy,
+    });
+  });
+  return curatedBook;
+}
+
+export async function fsDeleteCuratedBook(id: string): Promise<void> {
+  const user = auth.currentUser;
+  if (!user || !(await fsGetAdminRole(user.uid))) {
+    throw new Error("Administrator access is required to remove curated books.");
+  }
+  const path = `books/${id}`;
+  try {
+    await deleteDoc(doc(db, "books", id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export function subscribeToFirestore(
+  uid: string,
+  isAdmin: boolean,
+  updateState: (partial: Record<string, unknown>) => void,
+): Unsubscribe {
+  if (typeof window === "undefined" || !firebaseConfigured) return () => {};
 
   const unsubs: (() => void)[] = [];
 
@@ -102,84 +228,263 @@ export function subscribeToFirestore(updateState: (partial: any) => void) {
     collName: string,
     key: string,
     mapFn?: (docData: any, id: string) => T,
+    filters: ReturnType<typeof where>[] = [],
   ) => {
-    try {
-      const q = query(collection(db, collName), limit(100));
-      const unsub = onSnapshot(
-        q,
-        (snapshot) => {
-          const items = snapshot.docs.map((d) =>
-            mapFn ? mapFn(d.data(), d.id) : { id: d.id, ...d.data() },
-          );
-          if (items.length > 0) {
-            updateState({ [key]: items });
-          }
-        },
-        (error) => {
-          console.warn(`Firestore subscription failed on ${collName}:`, error.message);
-        },
-      );
-      unsubs.push(unsub);
-    } catch (e) {
-      console.warn(`Failed to bind collection ${collName}`, e);
-    }
+    const q = query(collection(db, collName), ...filters, limit(200));
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const items = snapshot.docs.map((d) =>
+          mapFn ? mapFn(d.data(), d.id) : { ...d.data(), id: d.id },
+        );
+        updateState({ [key]: items });
+      },
+      (error) => console.error(`Firestore subscription failed on ${collName}:`, error),
+    );
+    unsubs.push(unsub);
   };
 
   bind<Department>("departments", "departments");
-  bind<Book>("books", "books");
+  bind<CuratedBook>("books", "catalogBooks", (data, id) => ({ ...data, id }) as CuratedBook);
+  bind<Book>(
+    "userBooks",
+    "books",
+    (data, id) => {
+      const documentPrefix = `${uid}_`;
+      return {
+        ...data,
+        id: id.startsWith(documentPrefix) ? id.slice(documentPrefix.length) : String(data.id ?? ""),
+        firestoreId: id,
+      } as Book;
+    },
+    [where("userId", "==", uid)],
+  );
   bind<Challenge>("challenges", "challenges");
   bind<Notice>("notices", "notices");
   bind<Post>("posts", "posts");
   bind<Video>("videos", "videos");
-  bind<Suggestion>("suggestions", "suggestions");
+  bind<Suggestion>(
+    "suggestions",
+    "suggestions",
+    (data, id) => ({ ...data, id }) as Suggestion,
+    isAdmin ? [] : [where("userId", "==", uid)],
+  );
   bind<HolidayEntry>("holidays", "holidays");
-  bind<ReadingLog>("reading_logs", "logs");
-  bind<User>("users", "staff");
+  bind<AppNotification>(
+    "notifications",
+    "notifications",
+    (data, id) => ({ ...data, id, read: Boolean(data.readAt ?? data.read) }) as AppNotification,
+    [where("userId", "==", uid)],
+  );
+  bind<ReadingLog>(
+    "reading_logs",
+    "logs",
+    (data, id) => ({ ...data, id }) as ReadingLog,
+    isAdmin ? [] : [where("userId", "==", uid)],
+  );
+  let todayDate = getDateInIndia();
+  let unsubscribeTodayLogs = subscribeToTodayLogs(uid, todayDate, updateState);
+  const dayRolloverTimer = window.setInterval(() => {
+    const nextDate = getDateInIndia();
+    if (nextDate === todayDate) return;
+    todayDate = nextDate;
+    unsubscribeTodayLogs();
+    updateState({ todayPagesRead: 0 });
+    unsubscribeTodayLogs = subscribeToTodayLogs(uid, todayDate, updateState);
+  }, 60_000);
+  unsubs.push(() => {
+    unsubscribeTodayLogs();
+    window.clearInterval(dayRolloverTimer);
+  });
+  if (isAdmin) bind<User>("users", "staff", (data, id) => ({ ...data, id }) as User);
+  if (isAdmin) bind<AuditEntry>("auditLogs", "audit", (data, id) => ({ ...data, id }) as AuditEntry);
+
+  const userActivityUnsub = onSnapshot(
+    doc(db, "userActivity", uid),
+    (snapshot) => {
+      const data = snapshot.data();
+      const stringList = (key: string) => {
+        const value = data?.[key];
+        return Array.isArray(value)
+          ? value.filter((id: unknown): id is string => typeof id === "string")
+          : [];
+      };
+      updateState({
+        userActivity: snapshot.exists()
+          ? {
+              readNoticeIds: stringList("readNoticeIds"),
+              watchedVideoIds: stringList("watchedVideoIds"),
+              joinedChallengeIds: stringList("joinedChallengeIds"),
+            }
+          : { readNoticeIds: [], watchedVideoIds: [], joinedChallengeIds: [] },
+      });
+    },
+    (error) => console.error("User activity subscription failed:", error),
+  );
+  unsubs.push(userActivityUnsub);
 
   // Settings single document subscription
-  try {
-    const unsubSettings = onSnapshot(
-      doc(db, "settings", "habitRules"),
-      (snap) => {
-        if (snap.exists()) {
-          updateState({ settings: snap.data() as Settings });
-        }
-      },
-      (error) => {
-        console.warn("Settings subscription error:", error.message);
-      },
-    );
-    unsubs.push(unsubSettings);
-  } catch {}
+  const unsubSettings = onSnapshot(
+    doc(db, "settings", "habitRules"),
+    (snap) => {
+      if (snap.exists()) updateState({ settings: { ...demo.settings, ...snap.data() } as Settings });
+    },
+    (error) => console.error("Settings subscription failed:", error),
+  );
+  unsubs.push(unsubSettings);
 
   return () => {
     unsubs.forEach((u) => u());
   };
 }
 
-// Write mutations to Firestore with hardened error handling
-export async function fsSaveReadingLog(log: ReadingLog) {
-  const path = `reading_logs/${log.id}`;
+function subscribeToTodayLogs(
+  uid: string,
+  date: string,
+  updateState: (partial: Record<string, unknown>) => void,
+): Unsubscribe {
+  return onSnapshot(
+    query(
+      collection(db, "reading_logs"),
+      where("userId", "==", uid),
+      where("date", "==", date),
+    ),
+    (snapshot) => {
+      const pagesRead = snapshot.docs.reduce(
+        (total, logDocument) => total + Number(logDocument.data()["pages"] ?? 0),
+        0,
+      );
+      updateState({ todayPagesRead: pagesRead });
+    },
+    (error) => console.error("Today's reading log subscription failed:", error),
+  );
+}
+
+export async function fsCheckIn(
+  book: Book,
+  currentPage: number,
+  note: string | undefined,
+  minimumPages: number,
+): Promise<ReadingLog> {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in before recording reading progress.");
+
+  const date = getDateInIndia();
+  const logId = `${user.uid}_${date}`;
+  const logRef = doc(db, "reading_logs", logId);
+  const shelfRef = doc(db, "userBooks", `${user.uid}_${book.id}`);
+  const userRef = doc(db, "users", user.uid);
   try {
-    await setDoc(doc(db, "reading_logs", log.id), log);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, path);
+    return await runTransaction(db, async (transaction) => {
+      const [shelfSnapshot, logSnapshot, userSnapshot] = await Promise.all([
+        transaction.get(shelfRef),
+        transaction.get(logRef),
+        transaction.get(userRef),
+      ]);
+      if (!shelfSnapshot.exists() || !userSnapshot.exists()) {
+        throw new Error("Your account or bookshelf is not set up. Contact an administrator.");
+      }
+
+      const savedBook = shelfSnapshot.data() as Book;
+      const startPage =
+        logSnapshot.exists() && logSnapshot.data()["bookId"] === book.id
+          ? Number(logSnapshot.data()["fromPage"])
+          : Number(savedBook.currentPage);
+      const pages = currentPage - startPage;
+      if (!Number.isInteger(currentPage) || currentPage > savedBook.totalPages) {
+        throw new ReadingCheckInError(
+          `Enter a page number from ${startPage + minimumPages} to ${savedBook.totalPages}.`,
+        );
+      }
+      if (pages < minimumPages) {
+        throw new ReadingCheckInError(
+          `Read at least ${minimumPages} new page${minimumPages === 1 ? "" : "s"} before checking in.`,
+        );
+      }
+
+      const log: ReadingLog = {
+        id: logId,
+        userId: user.uid,
+        userName: user.displayName || user.email || "Staff",
+        bookId: book.id,
+        bookTitle: savedBook.title,
+        date,
+        fromPage: startPage,
+        toPage: currentPage,
+        pages,
+        ...(note ? { note: note.slice(0, 280) } : {}),
+      };
+      transaction.set(logRef, log);
+      transaction.update(shelfRef, {
+        currentPage: currentPage,
+      });
+      return log;
+    });
+  } catch (error) {
+    if (error instanceof ReadingCheckInError) throw error;
+    handleFirestoreError(error, OperationType.WRITE, `reading_logs/${logId}`);
   }
 }
 
-export async function fsSaveBook(book: Book) {
-  const path = `books/${book.id}`;
+export async function fsSaveBook(book: Book): Promise<Book> {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in before adding books to your shelf.");
+  const shelfBook = { ...book, userId: user.uid };
+  const shelfRef = doc(db, "userBooks", `${user.uid}_${book.id}`);
+  const path = shelfRef.path;
   try {
-    await setDoc(doc(db, "books", book.id), book);
+    return await runTransaction(db, async (transaction) => {
+      const existingSnapshot = await transaction.get(shelfRef);
+      if (existingSnapshot.exists()) {
+        const existingBook = existingSnapshot.data() as Book;
+        const status = book.status === "reading" ? "reading" : existingBook.status;
+        transaction.update(shelfRef, { status });
+        return {
+          ...existingBook,
+          id: book.id,
+          firestoreId: shelfRef.id,
+          status,
+        };
+      }
+      transaction.set(shelfRef, shelfBook);
+      return { ...shelfBook, firestoreId: shelfRef.id };
+    });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
 }
 
 export async function fsUpdateBook(id: string, patch: Partial<Book>) {
-  const path = `books/${id}`;
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in before updating your bookshelf.");
+  const path = `userBooks/${user.uid}_${id}`;
   try {
-    await updateDoc(doc(db, "books", id), patch);
+    await updateDoc(doc(db, "userBooks", `${user.uid}_${id}`), patch);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function fsAddUserActivity(
+  uid: string,
+  field: "readNoticeIds" | "watchedVideoIds" | "joinedChallengeIds",
+  id: string,
+) {
+  const path = `userActivity/${uid}`;
+  try {
+    await setDoc(doc(db, "userActivity", uid), {
+      userId: uid,
+      [field]: arrayUnion(id),
+    }, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function fsMarkNotificationRead(id: string) {
+  const path = `notifications/${id}`;
+  try {
+    await updateDoc(doc(db, "notifications", id), { readAt: new Date().toISOString() });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
@@ -209,6 +514,23 @@ export async function fsSaveVideo(video: Video) {
     await setDoc(doc(db, "videos", video.id), video);
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function fsSetPinnedVideo(id: string) {
+  const path = `videos/${id}`;
+  try {
+    const pinnedVideos = await getDocs(
+      query(collection(db, "videos"), where("pinnedTip", "==", true)),
+    );
+    const batch = writeBatch(db);
+    pinnedVideos.docs.forEach((videoDoc) => {
+      if (videoDoc.id !== id) batch.update(videoDoc.ref, { pinnedTip: false });
+    });
+    batch.update(doc(db, "videos", id), { pinnedTip: true });
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
 
@@ -269,7 +591,7 @@ export async function fsDeleteHoliday(id: string) {
 export async function fsUpdateSettings(patch: Partial<Settings>) {
   const path = "settings/habitRules";
   try {
-    await updateDoc(doc(db, "settings", "habitRules"), patch);
+    await setDoc(doc(db, "settings", "habitRules"), patch, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
@@ -304,6 +626,17 @@ export async function fsSaveDepartment(dept: Department) {
 
 export async function fsDeleteDepartment(id: string) {
   const path = `departments/${id}`;
+  let hasAssignedUsers = false;
+  try {
+    hasAssignedUsers = !(
+      await getDocs(query(collection(db, "users"), where("departmentId", "==", id), limit(1)))
+    ).empty;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, "users");
+  }
+  if (hasAssignedUsers) {
+    throw new Error("This department cannot be deleted while user accounts are assigned to it.");
+  }
   try {
     await deleteDoc(doc(db, "departments", id));
   } catch (err) {
@@ -324,6 +657,15 @@ export async function fsSaveTakeaway(takeaway: WeeklyTakeaway) {
   const path = `takeaways/${takeaway.id}`;
   try {
     await setDoc(doc(db, "takeaways", takeaway.id), takeaway);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function fsSaveAuditEntry(entry: AuditEntry) {
+  const path = `auditLogs/${entry.id}`;
+  try {
+    await setDoc(doc(db, "auditLogs", entry.id), entry);
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }

@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { LogOut, Mail, Phone, Users } from "lucide-react";
 import { StaffShell } from "@/components/staff/StaffShell";
 import { Button } from "@/components/ui/button";
@@ -8,7 +9,6 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { actions, useAppState } from "@/lib/store";
-import { useNotifications, useStaffList } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/profile")({
@@ -32,8 +32,8 @@ export const Route = createFileRoute("/profile")({
 function Profile() {
   const { t, i18n } = useTranslation();
   const { sessionUser, departments, staff, language, theme, notifications } = useAppState();
-  const { data: liveNotifications = notifications } = useNotifications();
-  const { data: liveStaff = staff } = useStaffList();
+  const liveNotifications = notifications;
+  const liveStaff = staff;
   const dept = departments.find((d) => d.id === sessionUser?.departmentId);
 
   return (
@@ -71,7 +71,12 @@ function Profile() {
               type="single"
               value={language}
               variant="outline"
-              onValueChange={(v) => v && actions.setLanguage(v as "en" | "mr")}
+              onValueChange={(v) =>
+                v &&
+                void actions.setLanguage(v as "en" | "mr").catch((error: unknown) =>
+                  toast.error(error instanceof Error ? error.message : "Unable to save language preference."),
+                )
+              }
               className="w-full"
             >
               <ToggleGroupItem value="mr" className="flex-1 touch-target">
@@ -90,7 +95,11 @@ function Profile() {
               type="time"
               className="h-12"
               value={sessionUser?.reminderTime ?? "07:30"}
-              onChange={(e) => actions.setReminderTime(e.target.value)}
+              onChange={(e) =>
+                void actions.setReminderTime(e.target.value).catch((error: unknown) =>
+                  toast.error(error instanceof Error ? error.message : "Unable to save reminder time."),
+                )
+              }
             />
           </div>
 
@@ -110,22 +119,23 @@ function Profile() {
 
         <div className="space-y-2">
           <p className="text-sm font-semibold">{t("profile.notificationList")}</p>
-          {liveNotifications.map((n: any) => (
+          {liveNotifications.map((n) => (
             <button
-              key={n.id || n._id}
-              onClick={() => actions.markNotificationRead(n.id || n._id)}
+              key={n.id}
+              onClick={() =>
+                void actions.markNotificationRead(n.id).catch((error: unknown) =>
+                  toast.error(error instanceof Error ? error.message : "Unable to mark notification as read."),
+                )
+              }
               className={cn(
                 "glass w-full rounded-2xl p-3 text-left",
                 !n.read && "border-primary/40 bg-primary/5",
               )}
             >
               <p className="text-sm font-medium">
-                {n.title || (i18n.language === "mr" ? n.titleMr : n.titleEn)}
+                {i18n.language === "mr" ? n.titleMr : n.titleEn}
               </p>
-              {n.body && <p className="text-xs text-muted-foreground mt-0.5">{n.body}</p>}
-              <p className="text-[11px] text-muted-foreground mt-1">
-                {n.at || (n.createdAt ? new Date(n.createdAt).toLocaleDateString() : "")}
-              </p>
+              <p className="text-[11px] text-muted-foreground mt-1">{n.at}</p>
             </button>
           ))}
           {liveNotifications.length === 0 && (

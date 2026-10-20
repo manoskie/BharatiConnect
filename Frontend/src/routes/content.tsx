@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { AlertTriangle, Check, Pin, Play, Sparkles } from "lucide-react";
 import { StaffShell } from "@/components/staff/StaffShell";
 import { Button } from "@/components/ui/button";
@@ -30,7 +31,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { actions, useAppState } from "@/lib/store";
-import { useSuggestions } from "@/lib/queries";
 import type { VideoCategory } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -63,8 +63,8 @@ const categories: VideoCategory[] = [
 function Content() {
   const { t, i18n } = useTranslation();
   const mr = i18n.language === "mr";
-  const { notices, posts, videos, books, suggestions } = useAppState();
-  const { data: liveSuggestions = suggestions } = useSuggestions();
+  const { notices, posts, videos, books, catalogBooks, suggestions, userActivity } = useAppState();
+  const liveSuggestions = suggestions;
   const [cat, setCat] = useState<string>("all");
   const [lang, setLang] = useState<string>("all");
   const [player, setPlayer] = useState<string | null>(null);
@@ -90,38 +90,45 @@ function Content() {
         </TabsList>
 
         <TabsContent value="notices" className="space-y-3">
-          {sortedNotices.map((n) => (
-            <button
-              key={n.id}
-              onClick={() => actions.markNoticeRead(n.id)}
-              className={cn(
-                "glass block w-full rounded-2xl p-4 text-left",
-                n.priority === "urgent" && "border-destructive/60 bg-destructive/8",
-                !n.read && "ring-2 ring-primary/30",
-              )}
-            >
-              <div className="flex items-center gap-2">
-                {n.priority === "urgent" && (
-                  <span className="flex items-center gap-1 rounded-full bg-destructive px-2 py-0.5 text-[10px] font-semibold text-destructive-foreground">
-                    <AlertTriangle className="size-3" /> {t("content.urgent")}
-                  </span>
+          {sortedNotices.map((n) => {
+            const read = userActivity.readNoticeIds.includes(n.id);
+            return (
+              <button
+                key={n.id}
+                onClick={() =>
+                  void actions.markNoticeRead(n.id).catch((error: unknown) =>
+                    toast.error(error instanceof Error ? error.message : "Unable to mark notice as read."),
+                  )
+                }
+                className={cn(
+                  "glass block w-full rounded-2xl p-4 text-left",
+                  n.priority === "urgent" && "border-destructive/60 bg-destructive/8",
+                  !read && "ring-2 ring-primary/30",
                 )}
-                {n.pinned && (
-                  <span className="flex items-center gap-1 rounded-full bg-streak/25 px-2 py-0.5 text-[10px] font-semibold text-streak-foreground">
-                    <Pin className="size-3" /> {t("content.pinned")}
-                  </span>
-                )}
-                {!n.read && (
-                  <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] text-primary-foreground">
-                    {t("content.unread")}
-                  </span>
-                )}
-                <span className="ml-auto text-[11px] text-muted-foreground">{n.publishedAt}</span>
-              </div>
-              <p className="mt-2 font-medium">{mr ? n.titleMr : n.titleEn}</p>
-              <p className="mt-1 text-sm text-muted-foreground">{mr ? n.bodyMr : n.bodyEn}</p>
-            </button>
-          ))}
+              >
+                <div className="flex items-center gap-2">
+                  {n.priority === "urgent" && (
+                    <span className="flex items-center gap-1 rounded-full bg-destructive px-2 py-0.5 text-[10px] font-semibold text-destructive-foreground">
+                      <AlertTriangle className="size-3" /> {t("content.urgent")}
+                    </span>
+                  )}
+                  {n.pinned && (
+                    <span className="flex items-center gap-1 rounded-full bg-streak/25 px-2 py-0.5 text-[10px] font-semibold text-streak-foreground">
+                      <Pin className="size-3" /> {t("content.pinned")}
+                    </span>
+                  )}
+                  {!read && (
+                    <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] text-primary-foreground">
+                      {t("content.unread")}
+                    </span>
+                  )}
+                  <span className="ml-auto text-[11px] text-muted-foreground">{n.publishedAt}</span>
+                </div>
+                <p className="mt-2 font-medium">{mr ? n.titleMr : n.titleEn}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{mr ? n.bodyMr : n.bodyEn}</p>
+              </button>
+            );
+          })}
         </TabsContent>
 
         <TabsContent value="posts" className="space-y-4">
@@ -207,11 +214,15 @@ function Content() {
                   <p className="line-clamp-2 text-xs font-medium">{mr ? v.titleMr : v.titleEn}</p>
                   <Button
                     size="sm"
-                    variant={v.watched ? "secondary" : "outline"}
+                    variant={userActivity.watchedVideoIds.includes(v.id) ? "secondary" : "outline"}
                     className="w-full text-[11px]"
-                    onClick={() => actions.markWatched(v.id)}
+                    onClick={() =>
+                      void actions.markWatched(v.id).catch((error: unknown) =>
+                        toast.error(error instanceof Error ? error.message : "Unable to save watched video."),
+                      )
+                    }
                   >
-                    {v.watched ? (
+                    {userActivity.watchedVideoIds.includes(v.id) ? (
                       <>
                         <Check className="size-3" /> {t("content.watched")}
                       </>
@@ -243,22 +254,47 @@ function Content() {
         <TabsContent value="books" className="space-y-5">
           {(
             [
-              ["content.staffPicks", books.filter((b) => b.staffPick)],
+              ["content.staffPicks", catalogBooks.filter((b) => b.staffPick)],
               ["content.forYou", books.filter((b) => b.status === "want_to_read")],
-              ["content.shortReads", books.filter((b) => b.totalPages < 150)],
+              ["content.shortReads", catalogBooks.filter((b) => b.totalPages < 150)],
             ] as const
           ).map(([label, list]) => (
             <div key={label} className="space-y-2">
               <p className="text-sm font-semibold">{t(label)}</p>
               <div className="flex gap-3 overflow-x-auto pb-2">
                 {list.map((b) => (
-                  <div key={b.id} className="w-28 shrink-0">
-                    <span
-                      className="block h-36 w-full rounded-xl"
-                      style={{ backgroundColor: b.coverColor }}
-                    />
+                  <div key={b.id} className="w-32 shrink-0">
+                    {"coverUrl" in b && b.coverUrl ? (
+                      <img src={b.coverUrl} alt="" className="h-36 w-full rounded-xl object-cover" />
+                    ) : (
+                      <span className="block h-36 w-full rounded-xl bg-primary/15" />
+                    )}
                     <p className="mt-1 truncate text-xs font-medium">{b.title}</p>
                     <p className="truncate text-[10px] text-muted-foreground">{b.author}</p>
+                    {"coverUrl" in b && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mt-2 w-full"
+                        onClick={() =>
+                          void actions
+                            .addBook({
+                              title: b.title,
+                              author: b.author,
+                              totalPages: b.totalPages,
+                              language: b.language,
+                              status: "reading",
+                              sourceId: b.id,
+                              ...(b.staffPick ? { staffPick: true } : {}),
+                            })
+                            .catch((error: unknown) =>
+                              toast.error(error instanceof Error ? error.message : "Unable to add this book."),
+                            )
+                        }
+                      >
+                        Start reading
+                      </Button>
+                    )}
                   </div>
                 ))}
                 {list.length === 0 && (
@@ -297,9 +333,14 @@ function Content() {
                 <Button
                   className="h-12 w-full"
                   disabled={!sugg.title}
-                  onClick={() => {
-                    actions.addSuggestion(sugg.title, sugg.author);
-                    setSugg({ title: "", author: "" });
+                  onClick={async () => {
+                    try {
+                      await actions.addSuggestion(sugg.title, sugg.author);
+                      setSugg({ title: "", author: "" });
+                      toast.success("Book suggestion submitted.");
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : "Unable to submit suggestion.");
+                    }
                   }}
                 >
                   {t("common.submit")}

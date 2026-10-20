@@ -28,7 +28,7 @@ export const Route = createFileRoute("/")({
 
 function Home() {
   const { t, i18n } = useTranslation();
-  const { sessionUser, todayLogged, challenges, books } = useAppState();
+  const { sessionUser, todayLogged, todayPagesRead, challenges, books } = useAppState();
   const user = sessionUser;
   const challenge = challenges.find((c) => c.joined) ?? challenges[0]!;
   const readingNow = books.filter((b) => b.status === "reading");
@@ -85,7 +85,7 @@ function Home() {
           </Button>
         </div>
 
-        <Link to="/compete" className="glass block rounded-3xl p-5">
+        {challenge && <Link to="/compete" className="glass block rounded-3xl p-5">
           <div className="flex items-center justify-between">
             <p className="flex items-center gap-2 text-sm font-semibold">
               <Trophy className="size-4 text-streak" /> {t("home.activeChallenge")}
@@ -100,9 +100,9 @@ function Home() {
             {challenge.progress} / {challenge.target} · +{challenge.rewardPoints}{" "}
             {t("common.points")}
           </p>
-        </Link>
+        </Link>}
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <div className="glass rounded-3xl p-5">
             <p className="text-xs text-muted-foreground">{t("common.points")}</p>
             <p className="text-3xl font-bold tabular-nums">{user?.points ?? 0}</p>
@@ -113,6 +113,10 @@ function Home() {
               <Sparkles className="size-5 text-primary" />
               {user?.level ?? 1}
             </p>
+          </div>
+          <div className="glass rounded-3xl p-5">
+            <p className="text-xs text-muted-foreground">{t("home.pagesReadToday")}</p>
+            <p className="text-3xl font-bold tabular-nums">{todayPagesRead}</p>
           </div>
         </div>
 

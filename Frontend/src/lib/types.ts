@@ -17,6 +17,7 @@ export type NotificationType =
 export type VideoCategory =
   "writing" | "spreadsheets" | "translation" | "donor_reports" | "social_media";
 export type Language = "en" | "mr";
+export type BookLanguage = Language | "hi";
 
 export type DayState = "logged" | "missed" | "frozen" | "holiday";
 
@@ -46,10 +47,11 @@ export interface User {
 
 export interface Book {
   id: string;
+  firestoreId?: string | undefined;
   title: string;
   author: string;
   totalPages: number;
-  language: Language;
+  language: BookLanguage;
   status: BookStatus;
   currentPage: number;
   coverColor: string;
@@ -57,6 +59,18 @@ export interface Book {
   review?: string | undefined;
   shortRead?: boolean | undefined;
   staffPick?: boolean | undefined;
+}
+
+export interface CuratedBook {
+  id: string;
+  title: string;
+  author: string;
+  totalPages: number;
+  language: BookLanguage;
+  coverUrl: string;
+  googleBooksId?: string;
+  staffPick: boolean;
+  createdBy: string;
 }
 
 export interface ReadingLog {
@@ -72,6 +86,7 @@ export interface ReadingLog {
   note?: string | undefined;
   proofUrl?: string | undefined;
   proofOutcome?: ProofOutcome | undefined;
+  proofReviewReason?: string | undefined;
 }
 
 export interface Challenge {
@@ -142,6 +157,7 @@ export interface Suggestion {
   title: string;
   author: string;
   byName: string;
+  userId?: string | undefined;
   status: SuggestionStatus;
   reason?: string | undefined;
 }
@@ -162,6 +178,13 @@ export interface AppNotification {
   titleMr: string;
   at: string;
   read: boolean;
+  readAt?: string | undefined;
+}
+
+export interface UserActivity {
+  readNoticeIds: string[];
+  watchedVideoIds: string[];
+  joinedChallengeIds: string[];
 }
 
 export interface AuditEntry {

@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { Camera, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { actions, useAppState } from "@/lib/store";
-import { PhotoConsent } from "./PhotoConsent";
 
 export function CheckinForm() {
   const { t } = useTranslation();
@@ -21,16 +20,27 @@ export function CheckinForm() {
   const reading = books.filter((b) => b.status === "reading");
   const [bookId, setBookId] = useState(reading[0]?.id ?? "");
   const book = reading.find((b) => b.id === bookId);
-  const [page, setPage] = useState<string>(String((book?.currentPage ?? 0) + 15));
+  const [page, setPage] = useState<string>(
+    String(Math.min((book?.currentPage ?? 0) + 15, book?.totalPages ?? 15)),
+  );
   const [note, setNote] = useState("");
-  const [proof, setProof] = useState<string | null>(null);
-  const [showConsent, setShowConsent] = useState(false);
-  const [pendingFile, setPendingFile] = useState<string | null>(null);
-  const [consented, setConsented] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [completedBookId, setCompletedBookId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!bookId && reading[0]) {
+      setBookId(reading[0].id);
+      setPage(String(Math.min(reading[0].currentPage + 15, reading[0].totalPages)));
+    }
+  }, [bookId, reading]);
 
   const pagesRead = Math.max(0, Number(page || 0) - (book?.currentPage ?? 0));
-  const proofRequired = settings.proofMode === "required";
-  const canSubmit = !!book && pagesRead >= settings.minimumPages && (!proofRequired || !!proof);
+  const canSubmit =
+    !!book &&
+    Number.isInteger(Number(page)) &&
+    pagesRead >= settings.minimumPages &&
+    Number(page) <= book.totalPages;
 
   return (
     <div className="glass space-y-5 rounded-3xl p-5">
@@ -47,7 +57,7 @@ export function CheckinForm() {
           onValueChange={(v) => {
             setBookId(v);
             const b = reading.find((x) => x.id === v);
-            setPage(String((b?.currentPage ?? 0) + 15));
+            setPage(String(Math.min((b?.currentPage ?? 0) + 15, b?.totalPages ?? 15)));
           }}
         >
           <SelectTrigger className="h-12">
@@ -100,66 +110,60 @@ export function CheckinForm() {
       </div>
 
       {settings.proofMode !== "off" && (
-        <div className="space-y-2">
-          <Label>
-            {t("reading.photoProof")}{" "}
-            {settings.proofMode === "optional" && (
-              <span className="text-muted-foreground">({t("common.optional")})</span>
-            )}
-          </Label>
-          <label className="touch-target flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-border p-4 text-sm">
-            <Camera className="size-5 text-primary" />
-            <span className="flex-1">{proof ? proof : t("reading.upload")}</span>
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={(e) => {
-                const fileName = e.target.files?.[0]?.name ?? null;
-                if (fileName && !consented) {
-                  setPendingFile(fileName);
-                  setShowConsent(true);
-                } else {
-                  setProof(fileName);
-                }
-              }}
-            />
-          </label>
-          <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
-            <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-            {t("reading.consent")}
-          </p>
-        </div>
+        <p className="rounded-xl bg-muted p-3 text-xs text-muted-foreground">
+          Photo proof is not part of Release 1. Ask an administrator to turn proof mode off.
+        </p>
       )}
 
-      <PhotoConsent
-        open={showConsent}
-        onOpenChange={setShowConsent}
-        onConsent={() => {
-          setConsented(true);
-          if (pendingFile) setProof(pendingFile);
-        }}
-      />
+      {errorMessage && (
+        <p role="alert" className="rounded-xl bg-destructive/10 p-3 text-xs text-destructive">
+          {errorMessage}
+        </p>
+      )}
 
       <Button
         size="lg"
-        disabled={!canSubmit}
+        disabled={!canSubmit || saving || settings.proofMode !== "off"}
         className="h-14 w-full rounded-2xl text-base"
-        onClick={() => {
+        onClick={async () => {
           if (!book) return;
-          actions.checkIn({
-            bookId: book.id,
-            toPage: Number(page),
-            ...(note ? { note } : {}),
-            ...(proof ? { proof } : {}),
-          });
-          setNote("");
-          setProof(null);
+          setSaving(true);
+          setErrorMessage(null);
+          try {
+            await actions.checkIn({
+              bookId: book.id,
+              toPage: Number(page),
+              ...(note ? { note } : {}),
+            });
+            setNote("");
+            if (Number(page) === book.totalPages) setCompletedBookId(book.id);
+            toast.success(t("reading.submitCheckin"));
+          } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : "Unable to save this check-in.");
+          } finally {
+            setSaving(false);
+          }
         }}
       >
-        {t("reading.submitCheckin")}
+        {saving ? "..." : t("reading.submitCheckin")}
       </Button>
+      {completedBookId === book?.id && book.status !== "finished" && (
+        <Button
+          variant="outline"
+          className="w-full"
+          onClick={async () => {
+            try {
+              await actions.setBookStatus(book.id, "finished");
+              setCompletedBookId(null);
+              toast.success(t("reading.finished"));
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : "Unable to mark this book as finished.");
+            }
+          }}
+        >
+          {t("reading.finished")}
+        </Button>
+      )}
     </div>
   );
 }

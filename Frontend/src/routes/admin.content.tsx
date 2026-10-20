@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pin } from "lucide-react";
+import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,6 +57,19 @@ function AdminContent() {
     category: "writing" as VideoCategory,
     language: "mr" as Language,
   });
+  const [saving, setSaving] = useState(false);
+
+  const save = async (operation: () => Promise<unknown>, onSuccess?: () => void) => {
+    setSaving(true);
+    try {
+      await operation();
+      onSuccess?.();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to save this content.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <AdminShell title={t("admin.content")}>
@@ -114,16 +128,15 @@ function AdminContent() {
             </div>
             <Button
               className="h-11 w-full"
-              disabled={!notice.titleEn || !notice.titleMr}
-              onClick={() => {
-                actions.addNotice({
+              disabled={saving || !notice.titleEn.trim() || !notice.titleMr.trim()}
+              onClick={() => void save(() => actions.addNotice({
                   titleEn: notice.titleEn,
                   titleMr: notice.titleMr,
                   bodyEn: notice.bodyEn,
                   bodyMr: notice.bodyMr,
                   priority: notice.urgent ? "urgent" : "normal",
                   pinned: notice.pinned,
-                });
+                }), () => {
                 setNotice({
                   titleEn: "",
                   titleMr: "",
@@ -132,7 +145,7 @@ function AdminContent() {
                   urgent: false,
                   pinned: false,
                 });
-              }}
+              })}
             >
               {t("common.submit")}
             </Button>
@@ -192,18 +205,19 @@ function AdminContent() {
             </div>
             <Button
               className="h-11 w-full"
-              disabled={!post.bodyEn}
-              onClick={() => {
+              disabled={saving || !post.bodyEn.trim()}
+              onClick={() => void save(() => {
                 const count = post.images ? post.images.split(",").length : 3;
-                actions.addPost({
+                return actions.addPost({
                   bodyEn: post.bodyEn,
                   bodyMr: post.bodyMr,
                   images: Array.from({ length: count }).map(
                     (_, i) => `https://picsum.photos/seed/new${Date.now()}${i}/800/600`,
                   ),
                 });
+              }, () => {
                 setPost({ bodyEn: "", bodyMr: "", images: "" });
-              }}
+              })}
             >
               {t("common.submit")}
             </Button>
@@ -281,11 +295,10 @@ function AdminContent() {
             </div>
             <Button
               className="h-11 w-full"
-              disabled={!video.titleEn || !video.youtubeId}
-              onClick={() => {
-                actions.addVideo(video);
+              disabled={saving || !video.titleEn.trim() || !video.youtubeId.trim()}
+              onClick={() => void save(() => actions.addVideo(video), () => {
                 setVideo({ ...video, titleEn: "", titleMr: "", youtubeId: "" });
-              }}
+              })}
             >
               {t("common.submit")}
             </Button>
@@ -308,7 +321,8 @@ function AdminContent() {
                   size="sm"
                   variant={v.pinnedTip ? "default" : "outline"}
                   className="gap-1 text-[11px]"
-                  onClick={() => actions.pinTip(v.id)}
+                  disabled={saving || v.pinnedTip}
+                  onClick={() => void save(() => actions.pinTip(v.id))}
                 >
                   <Pin className="size-3" /> {t("content.aiTip")}
                 </Button>
@@ -326,13 +340,14 @@ function AdminContent() {
                   {s.author} · {s.byName} · {s.status}
                 </p>
               </div>
-              <Button size="sm" onClick={() => actions.setSuggestionStatus(s.id, "approved")}>
+              <Button size="sm" disabled={saving} onClick={() => void save(() => actions.setSuggestionStatus(s.id, "approved"))}>
                 {t("common.approve")}
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => actions.setSuggestionStatus(s.id, "rejected")}
+                disabled={saving}
+                onClick={() => void save(() => actions.setSuggestionStatus(s.id, "rejected"))}
               >
                 {t("common.reject")}
               </Button>

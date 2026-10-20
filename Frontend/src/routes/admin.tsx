@@ -2,7 +2,6 @@ import { Outlet, createFileRoute } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { LoginCard } from "@/routes/login";
 import { LangThemeToggle } from "@/components/LangThemeToggle";
-import { PortalSwitch } from "@/components/PortalSwitch";
 import { useAppState } from "@/lib/store";
 
 export const Route = createFileRoute("/admin")({
@@ -24,15 +23,15 @@ export const Route = createFileRoute("/admin")({
 });
 
 function AdminLayout() {
-  const { adminAuthed, adminUser } = useAppState();
+  const { authReady, adminAuthed, adminUser } = useAppState();
   const { t } = useTranslation();
   const allowed = adminAuthed && (adminUser?.role === "admin" || adminUser?.role === "owner");
 
   if (!allowed) {
+    if (!authReady) return null;
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gradient-to-br from-brand-soft/60 via-background to-background p-6">
         <div className="flex items-center gap-2">
-          <PortalSwitch />
           <LangThemeToggle />
         </div>
         <p className="text-sm text-muted-foreground">{t("nav.adminPortal")}</p>

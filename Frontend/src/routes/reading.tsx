@@ -70,7 +70,7 @@ function Reading() {
                 <div className="grid grid-cols-2 gap-3">
                   {shelf(status).map((b) => (
                     <button
-                      key={b.id}
+                      key={b.firestoreId ?? b.id}
                       onClick={() => setDetail(b)}
                       className="glass rounded-2xl p-3 text-left"
                     >

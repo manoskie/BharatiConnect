@@ -1,17 +1,10 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
-import { useTranslation } from "react-i18next";
-import { z } from "zod";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { MailCheck } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { LangThemeToggle } from "@/components/LangThemeToggle";
-import { actions } from "@/lib/store";
-import { tokenStore, api } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { useTranslation } from "react-i18next";
 
 export const Route = createFileRoute("/invite")({
-  validateSearch: z.object({ token: z.string().optional() }),
   head: () => ({
     meta: [
       { title: "Accept invitation — BharatiConnect" },
@@ -25,42 +18,6 @@ export const Route = createFileRoute("/invite")({
 
 function Invite() {
   const { t } = useTranslation();
-  const { token } = Route.useSearch();
-  const navigate = useNavigate();
-  const [pw, setPw] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const valid = pw.length >= 8 && pw === confirm && !!token;
-
-  const handleAccept = async () => {
-    if (!valid || loading) return;
-    setErrorMsg(null);
-    setLoading(true);
-    try {
-      const res = await api.post("/auth/accept-invite", {
-        inviteToken: token,
-        password: pw,
-      });
-      if (res.data?.accessToken) {
-        tokenStore.set(res.data.accessToken, res.data.refreshToken);
-        actions.login(res.data.user);
-        void navigate({ to: "/" });
-        return;
-      }
-    } catch (err: any) {
-      const msg = err?.response?.data?.message;
-      if (msg) {
-        setErrorMsg(msg);
-        setLoading(false);
-        return;
-      }
-    }
-    // Demo fallback if backend is offline
-    tokenStore.set("demo-access-token", "demo-refresh-token");
-    actions.login();
-    void navigate({ to: "/" });
-  };
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gradient-to-b from-brand-soft/70 via-background to-background p-6">
@@ -75,36 +32,12 @@ function Invite() {
             <p className="text-xs text-muted-foreground">{t("auth.inviteHelp")}</p>
           </div>
         </div>
-        {!token && (
-          <p className="rounded-xl bg-destructive/10 p-3 text-xs text-destructive">
-            Invitation token missing — open the link from your invite email.
-          </p>
-        )}
-        {errorMsg && (
-          <p className="rounded-xl bg-destructive/10 p-2.5 text-xs text-destructive">{errorMsg}</p>
-        )}
-        <div className="space-y-1.5">
-          <Label htmlFor="pw">{t("auth.password")}</Label>
-          <Input
-            id="pw"
-            type="password"
-            className="h-12"
-            value={pw}
-            onChange={(e) => setPw(e.target.value)}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="c">{t("auth.confirmPassword")}</Label>
-          <Input
-            id="c"
-            type="password"
-            className="h-12"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-          />
-        </div>
-        <Button className="h-12 w-full" disabled={!valid || loading} onClick={handleAccept}>
-          {loading ? "..." : t("auth.acceptInvite")}
+        <p className="text-sm text-muted-foreground">
+          This invitation link is no longer valid. Ask your administrator to resend the Firebase
+          password setup email, then follow the link in that email.
+        </p>
+        <Button asChild className="h-12 w-full">
+          <Link to="/login">{t("auth.login")}</Link>
         </Button>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ function Holidays() {
     labelMr: "",
     userId: "",
   });
+  const [saving, setSaving] = useState(false);
 
   return (
     <AdminShell title={t("admin.holidays")}>
@@ -104,16 +106,23 @@ function Holidays() {
           </div>
           <Button
             className="h-11 w-full"
-            disabled={!form.labelEn || !form.labelMr}
-            onClick={() => {
-              actions.addHoliday({
+            disabled={saving || !form.labelEn.trim() || !form.labelMr.trim()}
+            onClick={async () => {
+              setSaving(true);
+              try {
+                await actions.addHoliday({
                 date: form.date,
                 type: form.type,
                 labelEn: form.labelEn,
                 labelMr: form.labelMr,
                 ...(form.type === "leave" && form.userId ? { userId: form.userId } : {}),
               });
-              setForm({ ...form, labelEn: "", labelMr: "", userId: "" });
+                setForm({ ...form, labelEn: "", labelMr: "", userId: "" });
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "Unable to save this calendar entry.");
+              } finally {
+                setSaving(false);
+              }
             }}
           >
             {t("common.add")}
@@ -141,7 +150,18 @@ function Holidays() {
                   </span>
                 )}
                 <span className="ml-auto text-xs tabular-nums text-muted-foreground">{h.date}</span>
-                <Button size="icon" variant="ghost" onClick={() => actions.removeHoliday(h.id)}>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  disabled={saving}
+                  onClick={async () => {
+                    try {
+                      await actions.removeHoliday(h.id);
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : "Unable to remove this calendar entry.");
+                    }
+                  }}
+                >
                   <Trash2 className="size-4 text-destructive" />
                 </Button>
               </div>

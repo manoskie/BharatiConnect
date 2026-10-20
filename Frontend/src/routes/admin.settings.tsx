@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/AdminShell";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -12,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { actions, useAppState } from "@/lib/store";
-import type { Language, ProofMode } from "@/lib/types";
+import type { Language, ProofMode, Settings } from "@/lib/types";
 
 export const Route = createFileRoute("/admin/settings")({
   head: () => ({
@@ -35,6 +38,12 @@ export const Route = createFileRoute("/admin/settings")({
 function AdminSettings() {
   const { t } = useTranslation();
   const { settings } = useAppState();
+  const [draft, setDraft] = useState<Settings>(settings);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setDraft(settings), [settings]);
+
+  const updateDraft = (patch: Partial<Settings>) => setDraft((current) => ({ ...current, ...patch }));
 
   return (
     <AdminShell title={t("admin.settings")}>
@@ -44,15 +53,17 @@ function AdminSettings() {
           <Input
             type="number"
             className="h-11"
-            value={settings.minimumPages}
-            onChange={(e) => actions.updateSettings({ minimumPages: Number(e.target.value) })}
+            min={1}
+            step={1}
+            value={draft.minimumPages}
+            onChange={(e) => updateDraft({ minimumPages: Number(e.target.value) })}
           />
         </div>
         <div className="space-y-1.5">
           <Label>{t("admin.proofMode")}</Label>
           <Select
-            value={settings.proofMode}
-            onValueChange={(v) => actions.updateSettings({ proofMode: v as ProofMode })}
+            value={draft.proofMode}
+            onValueChange={(v) => updateDraft({ proofMode: v as ProofMode })}
           >
             <SelectTrigger className="h-11">
               <SelectValue />
@@ -69,8 +80,10 @@ function AdminSettings() {
           <Input
             type="number"
             className="h-11"
-            value={settings.freezesPerWeek}
-            onChange={(e) => actions.updateSettings({ freezesPerWeek: Number(e.target.value) })}
+            min={0}
+            step={1}
+            value={draft.freezesPerWeek}
+            onChange={(e) => updateDraft({ freezesPerWeek: Number(e.target.value) })}
           />
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -79,8 +92,8 @@ function AdminSettings() {
             <Input
               type="time"
               className="h-11"
-              value={settings.reminderTime}
-              onChange={(e) => actions.updateSettings({ reminderTime: e.target.value })}
+              value={draft.reminderTime}
+              onChange={(e) => updateDraft({ reminderTime: e.target.value })}
             />
           </div>
           <div className="space-y-1.5">
@@ -88,27 +101,27 @@ function AdminSettings() {
             <Input
               type="time"
               className="h-11"
-              value={settings.nudgeTime}
-              onChange={(e) => actions.updateSettings({ nudgeTime: e.target.value })}
+              value={draft.nudgeTime}
+              onChange={(e) => updateDraft({ nudgeTime: e.target.value })}
             />
           </div>
         </div>
         <div className="space-y-3">
           <Label>
-            {t("admin.spotCheck")}: {settings.spotCheckRate}%
+            {t("admin.spotCheck")}: {draft.spotCheckRate}%
           </Label>
           <Slider
-            value={[settings.spotCheckRate]}
+            value={[draft.spotCheckRate]}
             max={100}
             step={5}
-            onValueChange={([v]) => actions.updateSettings({ spotCheckRate: v ?? 0 })}
+            onValueChange={([v]) => updateDraft({ spotCheckRate: v ?? 0 })}
           />
         </div>
         <div className="space-y-1.5">
           <Label>{t("admin.defaultLanguage")}</Label>
           <Select
-            value={settings.defaultLanguage}
-            onValueChange={(v) => actions.updateSettings({ defaultLanguage: v as Language })}
+            value={draft.defaultLanguage}
+            onValueChange={(v) => updateDraft({ defaultLanguage: v as Language })}
           >
             <SelectTrigger className="h-11">
               <SelectValue />
@@ -119,6 +132,23 @@ function AdminSettings() {
             </SelectContent>
           </Select>
         </div>
+        <Button
+          disabled={saving || !Number.isInteger(draft.minimumPages) || draft.minimumPages < 1 ||
+            !Number.isInteger(draft.freezesPerWeek) || draft.freezesPerWeek < 0}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              await actions.updateSettings(draft);
+              toast.success("Settings saved.");
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : "Unable to save settings.");
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? "Saving..." : t("common.save")}
+        </Button>
       </div>
     </AdminShell>
   );

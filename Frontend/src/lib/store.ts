@@ -1,16 +1,22 @@
 import { useSyncExternalStore } from "react";
 import * as demo from "./demo-data";
 import { api, tokenStore } from "./api";
-import { testConnection } from "./firebase";
+import { logoutUser, subscribeToFirebaseAuth, testConnection } from "./firebase";
 import {
-  seedFirestoreIfEmpty,
+  fsGetAdminRole,
+  fsGetUser,
+  fsCreateInvitedUser,
+  fsChangeUserRole,
   subscribeToFirestore,
-  fsSaveReadingLog,
+  fsCheckIn,
   fsSaveBook,
   fsUpdateBook,
   fsSaveNotice,
   fsSavePost,
   fsSaveVideo,
+  fsSetPinnedVideo,
+  fsAddUserActivity,
+  fsMarkNotificationRead,
   fsSaveChallenge,
   fsUpdateChallenge,
   fsSaveSuggestion,
@@ -18,12 +24,12 @@ import {
   fsSaveHoliday,
   fsDeleteHoliday,
   fsUpdateSettings,
-  fsSaveUser,
   fsUpdateUser,
   fsSaveDepartment,
   fsDeleteDepartment,
   fsUpdateReadingLog,
   fsSaveTakeaway,
+  fsSaveAuditEntry,
 } from "./firebase-service";
 import type {
   AppNotification,
@@ -32,6 +38,7 @@ import type {
   Book,
   BookStatus,
   Challenge,
+  CuratedBook,
   Department,
   HolidayEntry,
   Language,
@@ -45,17 +52,21 @@ import type {
   User,
   Video,
   WeeklyTakeaway,
+  UserActivity,
 } from "./types";
 
 export interface AppState {
   language: Language;
   theme: "light" | "dark";
+  authReady: boolean;
   sessionUser: User | null;
   adminUser: User | null;
   adminAuthed: boolean;
   departments: Department[];
   staff: User[];
   books: Book[];
+  catalogBooks: CuratedBook[];
+  userActivity: UserActivity;
   logs: ReadingLog[];
   challenges: Challenge[];
   badges: BadgeDef[];
@@ -69,6 +80,7 @@ export interface AppState {
   settings: Settings;
   dayStates: Record<string, "logged" | "missed" | "frozen" | "holiday">;
   todayLogged: boolean;
+  todayPagesRead: number;
   lastCelebration: { points: number; streak: number } | null;
   takeaways: WeeklyTakeaway[];
 }
@@ -99,12 +111,15 @@ export function normalizeUser(raw: any): User {
 const initial: AppState = {
   language: "mr",
   theme: "light",
-  sessionUser: demo.currentUser,
-  adminUser: demo.adminUser,
-  adminAuthed: true,
+  authReady: false,
+  sessionUser: null,
+  adminUser: null,
+  adminAuthed: false,
   departments: demo.departments,
   staff: demo.staff,
   books: demo.books,
+  catalogBooks: [],
+  userActivity: { readNoticeIds: [], watchedVideoIds: [], joinedChallengeIds: [] },
   logs: demo.readingLogs,
   challenges: demo.challenges,
   badges: demo.badges,
@@ -118,7 +133,9 @@ const initial: AppState = {
   settings: demo.settings,
   dayStates: demo.dayStates,
   todayLogged: false,
+  todayPagesRead: 0,
   lastCelebration: null,
+  takeaways: [],
 };
 
 let state = initial;
@@ -130,7 +147,37 @@ const set = (patch: Partial<AppState> | ((s: AppState) => Partial<AppState>)) =>
   emit();
 };
 
-const uid = () => Math.random().toString(36).slice(2, 10);
+const uid = () => crypto.randomUUID();
+
+function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
+  return [item, ...items.filter((existing) => existing.id !== item.id)];
+}
+
+function todayInKolkata() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function calculateCurrentStreak(logs: ReadingLog[]) {
+  const dates = new Set(logs.map((log) => log.date));
+  const today = todayInKolkata();
+  const [year, month, day] = today.split("-").map(Number);
+  const todayUtc = Date.UTC(year!, month! - 1, day!);
+  const yesterday = new Date(todayUtc - 86_400_000).toISOString().slice(0, 10);
+  let cursor = dates.has(today) ? todayUtc : dates.has(yesterday) ? todayUtc - 86_400_000 : null;
+  if (cursor === null) return 0;
+
+  let streak = 0;
+  while (dates.has(new Date(cursor).toISOString().slice(0, 10))) {
+    streak++;
+    cursor -= 86_400_000;
+  }
+  return streak;
+}
 
 export const store = {
   subscribe(l: () => void) {
@@ -155,17 +202,22 @@ function logAudit(action: string, target: string, before?: string, after?: strin
     ...(after !== undefined && { after }),
   };
   set({ audit: [entry, ...state.audit] });
+  if (state.adminUser) {
+    void fsSaveAuditEntry(entry).catch((error: unknown) => {
+      console.error(`Unable to persist administrator audit entry "${entry.action}":`, error);
+    });
+  }
 }
 
 let hydratingPromise: Promise<void> | null = null;
+let authDataUnsubscribe: (() => void) | null = null;
+let authStateGeneration = 0;
 
 export const actions = {
-  setLanguage(language: Language) {
+  async setLanguage(language: Language) {
+    if (state.sessionUser) await fsUpdateUser(state.sessionUser.id, { language });
     set({ language });
     if (typeof window !== "undefined") localStorage.setItem("bc.lang", language);
-    if (tokenStore.access()) {
-      api.patch("/me/profile", { language }).catch(() => {});
-    }
   },
   setTheme(theme: "light" | "dark") {
     set({ theme });
@@ -174,265 +226,210 @@ export const actions = {
       document.documentElement.classList.toggle("dark", theme === "dark");
     }
   },
-  setReminderTime(time: string) {
-    if (!state.sessionUser) return;
+  async setReminderTime(time: string) {
+    if (!state.sessionUser) throw new Error("Sign in before changing reminder settings.");
+    await fsUpdateUser(state.sessionUser.id, { reminderTime: time });
     set({ sessionUser: { ...state.sessionUser, reminderTime: time } });
-    if (tokenStore.access()) {
-      api.patch("/me/profile", { reminderTime: time }).catch(() => {});
-    }
   },
-  login(user?: any) {
-    const normalized = user ? normalizeUser(user) : demo.currentUser;
+  login(user: User) {
+    const normalized = normalizeUser(user);
     set({ sessionUser: normalized });
-    if (normalized.role === "admin" || normalized.role === "owner") {
-      set({ adminAuthed: true, adminUser: normalized });
-    }
   },
   logout() {
     if (tokenStore.refresh()) {
-      api.post("/auth/logout", { refreshToken: tokenStore.refresh() }).catch(() => {});
+      api.post("/auth/logout", { refreshToken: tokenStore.refresh() }).catch((error: unknown) => {
+        console.error("Legacy API logout failed:", error);
+      });
     }
     tokenStore.clear();
+    void logoutUser().catch((error) => {
+      console.error("Firebase sign-out failed:", error);
+    });
     set({ sessionUser: null, adminAuthed: false, adminUser: null });
   },
   adminLogin(user?: any) {
-    const normalized = user ? normalizeUser(user) : demo.adminUser;
-    set({ adminAuthed: true, adminUser: normalized });
+    const normalized = normalizeUser(user);
+    set({ sessionUser: normalized, adminAuthed: true, adminUser: normalized });
   },
   adminLogout() {
-    set({ adminAuthed: false });
+    actions.logout();
   },
 
-  checkIn(input: { bookId: string; toPage: number; note?: string; proof?: string }) {
-    const user = state.sessionUser ?? demo.currentUser;
+  async checkIn(input: { bookId: string; toPage: number; note?: string }): Promise<ReadingLog> {
+    const user = state.sessionUser;
+    if (!user) throw new Error("Sign in before recording reading progress.");
     const book = state.books.find((b) => b.id === input.bookId);
-    if (!book) return;
-    const pages = Math.max(0, input.toPage - book.currentPage);
-    const points = 10 + Math.min(40, pages);
-    const today = demo.iso(new Date());
+    if (!book || book.status !== "reading") {
+      throw new Error("Choose a book marked as currently reading.");
+    }
 
-    const log: ReadingLog = {
-      id: uid(),
-      userId: user.id,
-      userName: user.name,
-      bookId: book.id,
-      bookTitle: book.title,
-      date: today,
-      fromPage: book.currentPage,
-      toPage: input.toPage,
-      pages,
-      ...(input.note ? { note: input.note } : {}),
-      ...(input.proof
-        ? { proofUrl: input.proof, proofOutcome: "needs_review" as ProofOutcome }
-        : {}),
-    };
-    const streak = user.streak + (state.todayLogged ? 0 : 1);
-
-    // Optimistic update
+    const log = await fsCheckIn(book, input.toPage, input.note, state.settings.minimumPages);
+    const logs = [log, ...state.logs.filter((existing) => existing.id !== log.id)];
+    const streak = calculateCurrentStreak(logs);
     set({
-      logs: [log, ...state.logs],
+      logs,
       books: state.books.map((b) =>
         b.id === book.id
           ? {
               ...b,
               currentPage: input.toPage,
-              status: input.toPage >= b.totalPages ? "finished" : b.status,
             }
           : b,
       ),
-      sessionUser: { ...user, streak, points: user.points + points },
+      sessionUser: { ...user, streak },
       todayLogged: true,
-      dayStates: { ...state.dayStates, [today]: "logged" },
-      lastCelebration: { points, streak },
-      challenges: state.challenges.map((c) =>
-        c.joined ? { ...c, progress: c.progress + (c.type === "individual_pages" ? pages : 1) } : c,
-      ),
+      todayPagesRead: log.pages,
+      dayStates: { ...state.dayStates, [log.date]: "logged" },
+      lastCelebration: { points: 0, streak },
     });
-
-    fsSaveReadingLog(log).catch(() => {});
-
-    // Call backend API if authenticated
-    if (tokenStore.access()) {
-      api
-        .post("/reading/check-in", {
-          bookId: input.bookId,
-          currentPage: input.toPage,
-          note: input.note,
-        })
-        .then(({ data }) => {
-          if (data?.currentStreak) {
-            set((s) => ({
-              sessionUser: s.sessionUser ? { ...s.sessionUser, streak: data.currentStreak } : null,
-            }));
-          }
-        })
-        .catch((err) => {
-          console.warn("CheckIn API call fell back to local store:", err?.message);
-        });
-    }
+    return log;
   },
 
   clearCelebration() {
     set({ lastCelebration: null });
   },
 
-  addBook(book: Omit<Book, "id" | "currentPage" | "coverColor">) {
+  async addBook(
+    book: Omit<Book, "id" | "currentPage" | "coverColor"> & { sourceId?: string },
+  ) {
+    if (!state.sessionUser) throw new Error("Sign in before adding books to your shelf.");
     const colors = ["#6366f1", "#10B981", "#F59E0B", "#0ea5e9", "#8b5cf6", "#ef4444"];
+    const { sourceId, ...bookDetails } = book;
+    const existingBook = sourceId
+      ? state.books.find((shelfBook) => shelfBook.id === sourceId)
+      : undefined;
+    const status =
+      existingBook && book.status !== "reading" ? existingBook.status : book.status;
     const newBook: Book = {
-      ...book,
-      id: uid(),
+      ...bookDetails,
+      status,
+      id: existingBook?.id ?? sourceId ?? uid(),
       currentPage: 0,
       coverColor: colors[state.books.length % colors.length]!,
       shortRead: book.totalPages < 150,
     };
-    set({ books: [...state.books, newBook] });
-    fsSaveBook(newBook).catch(() => {});
-
-    if (tokenStore.access()) {
-      api
-        .post("/me/shelf", {
-          bookId: newBook.id,
-          status: book.status,
-        })
-        .catch(() => {});
+    if (
+      newBook.status === "reading" &&
+      existingBook?.status !== "reading" &&
+      state.books.filter((shelfBook) => shelfBook.status === "reading").length >= 3
+    ) {
+      throw new Error("You can have up to 3 books in Reading at a time.");
     }
+    const savedBook = await fsSaveBook(newBook);
+    set({ books: upsertById(state.books, savedBook) });
+    return savedBook;
   },
 
-  setBookStatus(id: string, status: BookStatus) {
+  async setBookStatus(id: string, status: BookStatus) {
     if (
       status === "reading" &&
       state.books.filter((b) => b.status === "reading" && b.id !== id).length >= 3
     ) {
       return false;
     }
+    await fsUpdateBook(id, { status });
     set({ books: state.books.map((b) => (b.id === id ? { ...b, status } : b)) });
-    fsUpdateBook(id, { status }).catch(() => {});
-
-    if (tokenStore.access()) {
-      api.patch(`/me/shelf/${id}`, { status }).catch(() => {});
-    }
     return true;
   },
 
-  rateBook(id: string, rating: number, review: string) {
+  async rateBook(id: string, rating: number, review: string) {
+    await fsUpdateBook(id, { rating, review });
     set({ books: state.books.map((b) => (b.id === id ? { ...b, rating, review } : b)) });
-    if (tokenStore.access()) {
-      api.patch(`/me/shelf/${id}`, { rating, review }).catch(() => {});
-    }
   },
 
-  joinChallenge(id: string) {
-    set({ challenges: state.challenges.map((c) => (c.id === id ? { ...c, joined: true } : c)) });
-    if (tokenStore.access()) {
-      api.post(`/challenges/${id}/join`).catch(() => {});
-    }
+  async joinChallenge(id: string) {
+    const user = state.sessionUser;
+    if (!user) throw new Error("Sign in before joining a challenge.");
+    await fsAddUserActivity(user.id, "joinedChallengeIds", id);
+    set({
+      userActivity: {
+        ...state.userActivity,
+        joinedChallengeIds: [...new Set([...state.userActivity.joinedChallengeIds, id])],
+      },
+    });
   },
 
-  markNoticeRead(id: string) {
-    set({ notices: state.notices.map((n) => (n.id === id ? { ...n, read: true } : n)) });
-    if (tokenStore.access()) {
-      api.post(`/notices/${id}/read`).catch(() => {});
-    }
+  async markNoticeRead(id: string) {
+    const user = state.sessionUser;
+    if (!user) throw new Error("Sign in to mark notices as read.");
+    await fsAddUserActivity(user.id, "readNoticeIds", id);
+    set({
+      userActivity: {
+        ...state.userActivity,
+        readNoticeIds: [...new Set([...state.userActivity.readNoticeIds, id])],
+      },
+    });
   },
 
-  markWatched(id: string) {
-    set({ videos: state.videos.map((v) => (v.id === id ? { ...v, watched: true } : v)) });
-    if (tokenStore.access()) {
-      api.post(`/videos/${id}/watched`).catch(() => {});
-    }
+  async markWatched(id: string) {
+    const user = state.sessionUser;
+    if (!user) throw new Error("Sign in to save watched videos.");
+    await fsAddUserActivity(user.id, "watchedVideoIds", id);
+    set({
+      userActivity: {
+        ...state.userActivity,
+        watchedVideoIds: [...new Set([...state.userActivity.watchedVideoIds, id])],
+      },
+    });
   },
 
-  addSuggestion(title: string, author: string) {
+  async addSuggestion(title: string, author: string) {
     const newSug = {
       id: uid(),
       title,
       author,
       byName: state.sessionUser?.name ?? "Staff",
+      ...(state.sessionUser ? { userId: state.sessionUser.id } : {}),
       status: "pending" as const,
     };
-    set({
-      suggestions: [newSug, ...state.suggestions],
-    });
-    fsSaveSuggestion(newSug).catch(() => {});
-    if (tokenStore.access()) {
-      api.post("/suggestions/books", { title, author }).catch(() => {});
-    }
+    await fsSaveSuggestion(newSug);
+    set({ suggestions: upsertById(state.suggestions, newSug) });
   },
 
-  setSuggestionStatus(id: string, status: Suggestion["status"]) {
+  async setSuggestionStatus(id: string, status: Suggestion["status"]) {
+    await fsUpdateSuggestion(id, status);
     set({ suggestions: state.suggestions.map((s) => (s.id === id ? { ...s, status } : s)) });
-    fsUpdateSuggestion(id, status).catch(() => {});
     logAudit(`suggestion.${status}`, id);
-    if (tokenStore.access()) {
-      api.patch(`/admin/suggestions/${id}`, { status }).catch(() => {});
-    }
   },
 
-  markNotificationRead(id: string) {
+  async markNotificationRead(id: string) {
+    await fsMarkNotificationRead(id);
     set({
       notifications: state.notifications.map((n) => (n.id === id ? { ...n, read: true } : n)),
     });
-    if (tokenStore.access()) {
-      api.post(`/me/notifications/${id}/read`).catch(() => {});
-    }
   },
 
   // Admin actions
-  addStaff(input: { name: string; email: string; phone: string; departmentId: string }) {
-    const user: User = {
-      ...input,
-      id: uid(),
-      role: "staff",
-      active: true,
-      streak: 0,
-      points: 0,
-      level: 1,
-      language: state.settings.defaultLanguage,
-      reminderTime: state.settings.reminderTime,
-      joinedAt: demo.iso(new Date()),
-      avatarColor: "#6366f1",
-    };
-    set({ staff: [user, ...state.staff] });
-    fsSaveUser(user).catch(() => {});
+  async addStaff(input: { name: string; email: string; phone: string; departmentId: string }) {
+    const user = await fsCreateInvitedUser({ ...input, role: "staff" });
+    set({ staff: upsertById(state.staff, user) });
     logAudit("staff.invite", user.name, undefined, "invited");
-
-    if (tokenStore.access()) {
-      api.post("/admin/users", input).catch(() => {});
-    }
-    return `${typeof window === "undefined" ? "" : window.location.origin}/invite?token=${uid()}${uid()}`;
+    return user;
   },
 
-  toggleStaffActive(id: string) {
+  async toggleStaffActive(id: string) {
     const target = state.staff.find((s) => s.id === id);
-    const newActive = !target?.active;
+    if (!target) return;
+    const newActive = !target.active;
+    await fsUpdateUser(id, { active: newActive });
     set({ staff: state.staff.map((s) => (s.id === id ? { ...s, active: newActive } : s)) });
-    fsUpdateUser(id, { active: newActive }).catch(() => {});
-    if (target) {
-      logAudit(
-        target.active ? "staff.deactivate" : "staff.reactivate",
-        target.name,
-        target.active ? "active" : "inactive",
-        target.active ? "inactive" : "active",
-      );
-      if (tokenStore.access()) {
-        api.post(`/admin/users/${id}/deactivate`).catch(() => {});
-      }
-    }
+    logAudit(
+      target.active ? "staff.deactivate" : "staff.reactivate",
+      target.name,
+      target.active ? "active" : "inactive",
+      target.active ? "inactive" : "active",
+    );
   },
 
-  setStaffRole(id: string, role: Role) {
+  async setStaffRole(id: string, role: Role) {
     const target = state.staff.find((s) => s.id === id);
+    if (!target || (role !== "staff" && role !== "admin")) return;
+    await fsChangeUserRole(id, role);
     set({ staff: state.staff.map((s) => (s.id === id ? { ...s, role } : s)) });
-    fsUpdateUser(id, { role }).catch(() => {});
-    if (target) {
-      logAudit("staff.role", target.name, target.role, role);
-      if (tokenStore.access()) {
-        api.patch(`/admin/users/${id}/role`, { role }).catch(() => {});
-      }
-    }
+    logAudit("staff.role", target.name, target.role, role);
   },
 
-  saveDepartment(dept: { id?: string; nameEn: string; nameMr: string }) {
+  async saveDepartment(dept: { id?: string; nameEn: string; nameMr: string }) {
     if (dept.id) {
       const updatedDept = {
         id: dept.id,
@@ -440,55 +437,37 @@ export const actions = {
         nameMr: dept.nameMr,
         staffCount: state.departments.find((d) => d.id === dept.id)?.staffCount || 0,
       };
-      set({
-        departments: state.departments.map((d) =>
-          d.id === dept.id ? { ...d, nameEn: dept.nameEn, nameMr: dept.nameMr } : d,
-        ),
-      });
-      fsSaveDepartment(updatedDept).catch(() => {});
+      await fsSaveDepartment(updatedDept);
+      set({ departments: upsertById(state.departments, updatedDept) });
       logAudit("department.update", dept.nameEn);
-      if (tokenStore.access()) {
-        api
-          .patch(`/admin/departments/${dept.id}`, {
-            name: { en: dept.nameEn, mr: dept.nameMr },
-          })
-          .catch(() => {});
-      }
     } else {
       const newDept = { id: uid(), ...dept, staffCount: 0 };
-      set({
-        departments: [...state.departments, newDept],
-      });
-      fsSaveDepartment(newDept).catch(() => {});
+      await fsSaveDepartment(newDept);
+      set({ departments: upsertById(state.departments, newDept) });
       logAudit("department.create", dept.nameEn);
-      if (tokenStore.access()) {
-        api
-          .post("/admin/departments", {
-            name: { en: dept.nameEn, mr: dept.nameMr },
-          })
-          .catch(() => {});
-      }
     }
   },
 
-  deleteDepartment(id: string) {
+  async deleteDepartment(id: string) {
     const d = state.departments.find((x) => x.id === id);
-    set({ departments: state.departments.filter((x) => x.id !== id) });
-    fsDeleteDepartment(id).catch(() => {});
-    if (d) {
-      logAudit("department.delete", d.nameEn);
-      if (tokenStore.access()) {
-        api.delete(`/admin/departments/${id}`).catch(() => {});
-      }
+    if (!d) return;
+    if (state.staff.some((user) => user.departmentId === id)) {
+      throw new Error("This department cannot be deleted while user accounts are assigned to it.");
     }
+    await fsDeleteDepartment(id);
+    set({ departments: state.departments.filter((x) => x.id !== id) });
+    logAudit("department.delete", d.nameEn);
   },
 
-  reviewProof(logId: string, outcome: ProofOutcome, reason?: string) {
+  async reviewProof(logId: string, outcome: ProofOutcome, reason?: string) {
     const log = state.logs.find((l) => l.id === logId);
+    await fsUpdateReadingLog(logId, {
+      proofOutcome: outcome,
+      ...(reason ? { proofReviewReason: reason } : {}),
+    });
     set({
       logs: state.logs.map((l) => (l.id === logId ? { ...l, proofOutcome: outcome } : l)),
     });
-    fsUpdateReadingLog(logId, { proofOutcome: outcome }).catch(() => {});
     if (log) {
       logAudit(
         `proof.${outcome}`,
@@ -496,163 +475,95 @@ export const actions = {
         "needs_review",
         outcome,
       );
-      if (tokenStore.access()) {
-        const decision = outcome === "accepted" ? "accepted" : "rejected";
-        api.post(`/admin/proof-reviews/${logId}/decision`, { decision, reason }).catch(() => {});
-      }
     }
   },
 
-  adjustMissedDay(date: string, target: string) {
-    set({ dayStates: { ...state.dayStates, [date]: "logged" } });
-    logAudit("reading.manual_adjust", `${target} — ${date}`, "missed", "logged");
-    if (tokenStore.access()) {
-      api.post("/admin/reading/add-day", { date, targetUserId: target }).catch(() => {});
-    }
+  async adjustMissedDay(_date: string, _target: string) {
+    throw new Error("Manual reading adjustments are not available until a trusted server-side audit workflow is configured.");
   },
 
-  addNotice(notice: Omit<Notice, "id" | "read" | "publishedAt">) {
+  async addNotice(notice: Omit<Notice, "id" | "read" | "publishedAt">) {
     const newNotice = { ...notice, id: uid(), read: false, publishedAt: demo.iso(new Date()) };
-    set({ notices: [newNotice, ...state.notices] });
-    fsSaveNotice(newNotice).catch(() => {});
+    await fsSaveNotice(newNotice);
+    set({ notices: upsertById(state.notices, newNotice) });
     logAudit("notice.publish", notice.titleEn);
-    if (tokenStore.access()) {
-      api
-        .post("/admin/notices", {
-          title: { en: notice.titleEn, mr: notice.titleMr },
-          body: { en: notice.bodyEn, mr: notice.bodyMr },
-          priority: notice.priority,
-          pinned: notice.pinned,
-        })
-        .catch(() => {});
-    }
   },
 
-  addPost(post: Omit<Post, "id" | "publishedAt" | "authorName">) {
+  async addPost(post: Omit<Post, "id" | "publishedAt" | "authorName">) {
     const newPost = {
       ...post,
       id: uid(),
       authorName: state.adminUser?.name ?? "Admin",
       publishedAt: demo.iso(new Date()),
     };
-    set({ posts: [newPost, ...state.posts] });
-    fsSavePost(newPost).catch(() => {});
+    await fsSavePost(newPost);
+    set({ posts: upsertById(state.posts, newPost) });
     logAudit("post.publish", post.bodyEn.slice(0, 40));
-    if (tokenStore.access()) {
-      api
-        .post("/admin/posts", {
-          body: { en: post.bodyEn, mr: post.bodyMr },
-          images: post.images,
-        })
-        .catch(() => {});
-    }
   },
 
-  addVideo(video: Omit<Video, "id" | "watched">) {
+  async addVideo(video: Omit<Video, "id" | "watched">) {
     const newVideo = { ...video, id: uid(), watched: false };
-    set({ videos: [newVideo, ...state.videos] });
-    fsSaveVideo(newVideo).catch(() => {});
+    await fsSaveVideo(newVideo);
+    set({ videos: upsertById(state.videos, newVideo) });
     logAudit("video.create", video.titleEn);
-    if (tokenStore.access()) {
-      api
-        .post("/admin/videos", {
-          youtubeUrl: `https://www.youtube.com/watch?v=${video.youtubeId}`,
-          category: video.category,
-          language: video.language,
-          description: { en: video.titleEn, mr: video.titleMr },
-        })
-        .catch(() => {});
-    }
   },
 
-  pinTip(id: string) {
+  async pinTip(id: string) {
+    await fsSetPinnedVideo(id);
     set({ videos: state.videos.map((v) => ({ ...v, pinnedTip: v.id === id })) });
     logAudit("video.pin_ai_tip", id);
-    if (tokenStore.access()) {
-      api.patch(`/admin/videos/${id}`, { pinnedTip: true }).catch(() => {});
-    }
   },
 
-  saveChallenge(challenge: Omit<Challenge, "id" | "progress" | "joined">) {
+  async saveChallenge(challenge: Omit<Challenge, "id" | "progress" | "joined">) {
     const newChallenge = { ...challenge, id: uid(), progress: 0, joined: false };
-    set({
-      challenges: [...state.challenges, newChallenge],
-    });
-    fsSaveChallenge(newChallenge).catch(() => {});
+    await fsSaveChallenge(newChallenge);
+    set({ challenges: upsertById(state.challenges, newChallenge) });
     logAudit("challenge.create", challenge.titleEn);
-    if (tokenStore.access()) {
-      api
-        .post("/admin/challenges", {
-          title: { en: challenge.titleEn, mr: challenge.titleMr },
-          description: { en: challenge.titleEn, mr: challenge.titleMr },
-          target: challenge.target,
-          type: challenge.type,
-          startDate: new Date().toISOString(),
-          endDate: new Date(challenge.endsOn).toISOString(),
-          rewardPoints: challenge.rewardPoints,
-        })
-        .catch(() => {});
-    }
   },
 
-  addHoliday(entry: Omit<HolidayEntry, "id">) {
+  async addHoliday(entry: Omit<HolidayEntry, "id">) {
     const newHoliday = { ...entry, id: uid() };
-    set({ holidays: [...state.holidays, newHoliday] });
-    fsSaveHoliday(newHoliday).catch(() => {});
+    await fsSaveHoliday(newHoliday);
+    set({ holidays: upsertById(state.holidays, newHoliday) });
     logAudit(`calendar.${entry.type}`, entry.labelEn);
-    if (tokenStore.access()) {
-      api
-        .post("/admin/holidays", {
-          date: entry.date,
-          name: { en: entry.labelEn, mr: entry.labelMr },
-          type: entry.type,
-        })
-        .catch(() => {});
-    }
   },
 
-  removeHoliday(id: string) {
+  async removeHoliday(id: string) {
+    await fsDeleteHoliday(id);
     set({ holidays: state.holidays.filter((h) => h.id !== id) });
-    fsDeleteHoliday(id).catch(() => {});
     logAudit("calendar.delete", id);
-    if (tokenStore.access()) {
-      api.delete(`/admin/holidays/${id}`).catch(() => {});
-    }
   },
 
-  updateSettings(patch: Partial<Settings>) {
+  async updateSettings(patch: Partial<Settings>) {
     const before = state.settings;
-    set({ settings: { ...before, ...patch } });
-    fsUpdateSettings(patch).catch(() => {});
+    if (
+      patch.minimumPages !== undefined &&
+      (!Number.isInteger(patch.minimumPages) || patch.minimumPages < 1)
+    ) {
+      throw new Error("Minimum pages must be a positive whole number.");
+    }
+    if (
+      patch.freezesPerWeek !== undefined &&
+      (!Number.isInteger(patch.freezesPerWeek) || patch.freezesPerWeek < 0)
+    ) {
+      throw new Error("Weekly freezes must be a non-negative whole number.");
+    }
+    await fsUpdateSettings(patch);
+    set((current) => ({ settings: { ...current.settings, ...patch } }));
     Object.entries(patch).forEach(([k, v]) =>
       logAudit("settings.update", k, String(before[k as keyof Settings]), String(v)),
     );
-    if (tokenStore.access()) {
-      api.patch("/admin/settings", patch).catch(() => {});
-    }
   },
 
-  createAdmin(input: { name: string; email: string; departmentId: string }) {
-    const user: User = {
+  async createAdmin(input: { name: string; email: string; departmentId: string }) {
+    const user = await fsCreateInvitedUser({
       ...input,
       phone: "",
-      id: uid(),
       role: "admin",
-      active: true,
-      streak: 0,
-      points: 0,
-      level: 1,
-      language: state.settings.defaultLanguage,
-      reminderTime: state.settings.reminderTime,
-      joinedAt: demo.iso(new Date()),
-      avatarColor: "#F59E0B",
-    };
-    set({ staff: [user, ...state.staff] });
-    fsSaveUser(user).catch(() => {});
+    });
+    set({ staff: upsertById(state.staff, user) });
     logAudit("admin.create", user.name, undefined, "admin");
-    if (tokenStore.access()) {
-      api.post("/owner/admins", input).catch(() => {});
-    }
+    return user;
   },
 
   async hydrate() {
@@ -668,84 +579,136 @@ export const actions = {
         document.documentElement.classList.toggle("dark", theme === "dark");
       }
 
-      // Initialize Firestore connection, seed data if empty, and subscribe to real-time updates
+      // Connect to Firestore without copying demo records into the configured project.
       void testConnection();
-      void seedFirestoreIfEmpty();
-      subscribeToFirestore((partial) => set(partial));
-
-      // If access token exists, fetch profile and data to hydrate session
-      if (tokenStore.access()) {
-        try {
-          const { data } = await api.get("/me/profile");
-          if (data?.user) {
-            const normalized = normalizeUser(data.user);
-            if (data.displayStreak !== undefined) {
-              normalized.streak = data.displayStreak;
-            }
-            set({ sessionUser: normalized });
-            if (normalized.role === "admin" || normalized.role === "owner") {
-              set({ adminAuthed: true, adminUser: normalized });
-            }
-          }
-
-          // Fetch user shelf
-          try {
-            const shelfRes = await api.get("/me/shelf");
-            if (Array.isArray(shelfRes.data) && shelfRes.data.length > 0) {
-              const colors = ["#6366f1", "#10B981", "#F59E0B", "#0ea5e9", "#8b5cf6", "#ef4444"];
-              const mappedBooks: Book[] = shelfRes.data.map((ub: any, idx: number) => ({
-                id: String(ub.bookId?._id || ub.bookId || ub._id),
-                title: ub.bookId?.title || "Book",
-                author: ub.bookId?.author || "Author",
-                totalPages: ub.bookId?.totalPages || 100,
-                language: ub.bookId?.language || "mr",
-                status: ub.status || "want_to_read",
-                currentPage: ub.currentPage || 0,
-                coverColor: colors[idx % colors.length]!,
-                rating: ub.rating,
-                review: ub.review,
-              }));
-              set({ books: mappedBooks });
-            }
-          } catch {}
-
-          // If admin/owner, fetch admin collections
-          if (state.adminAuthed) {
-            try {
-              const [usersRes, deptsRes, settingsRes] = await Promise.allSettled([
-                api.get("/admin/users"),
-                api.get("/admin/departments"),
-                api.get("/admin/settings"),
-              ]);
-              if (usersRes.status === "fulfilled" && Array.isArray(usersRes.value.data)) {
-                set({ staff: usersRes.value.data.map(normalizeUser) });
-              }
-              if (deptsRes.status === "fulfilled" && Array.isArray(deptsRes.value.data)) {
-                set({
-                  departments: deptsRes.value.data.map((d: any) => ({
-                    id: String(d._id || d.id),
-                    nameEn: d.name?.en || d.nameEn || "",
-                    nameMr: d.name?.mr || d.nameMr || "",
-                    staffCount: d.staffCount || 0,
-                  })),
-                });
-              }
-              if (settingsRes.status === "fulfilled" && settingsRes.value.data) {
-                set({ settings: { ...demo.settings, ...settingsRes.value.data } });
-              }
-            } catch {}
-          }
-        } catch (err: any) {
-          console.warn("Hydrate error:", err?.message);
-          if (err?.response?.status === 401) {
-            tokenStore.clear();
-            set({ sessionUser: null, adminAuthed: false, adminUser: null });
-          }
+      subscribeToFirebaseAuth((firebaseUser) => {
+        const generation = ++authStateGeneration;
+        authDataUnsubscribe?.();
+        authDataUnsubscribe = null;
+        if (!firebaseUser) {
+          set({
+            authReady: true,
+            sessionUser: null,
+            adminAuthed: false,
+            adminUser: null,
+            staff: [],
+            books: [],
+            catalogBooks: [],
+            userActivity: { readNoticeIds: [], watchedVideoIds: [], joinedChallengeIds: [] },
+            logs: [],
+            challenges: [],
+            badges: [],
+            notices: [],
+            posts: [],
+            videos: [],
+            suggestions: [],
+            holidays: [],
+            notifications: [],
+            audit: [],
+            todayLogged: false,
+            todayPagesRead: 0,
+            dayStates: {},
+          });
+          return;
         }
-      } else {
-        // No token stored, ensure sessionUser is null
-        set({ sessionUser: null });
-      }
+
+        set({
+          authReady: false,
+          sessionUser: null,
+          adminAuthed: false,
+          adminUser: null,
+          staff: [],
+          books: [],
+          catalogBooks: [],
+          userActivity: { readNoticeIds: [], watchedVideoIds: [], joinedChallengeIds: [] },
+          logs: [],
+          challenges: [],
+          badges: [],
+          notices: [],
+          posts: [],
+          videos: [],
+          suggestions: [],
+          holidays: [],
+          notifications: [],
+          audit: [],
+          todayLogged: false,
+          todayPagesRead: 0,
+          dayStates: {},
+        });
+
+        void Promise.all([fsGetAdminRole(firebaseUser.uid), fsGetUser(firebaseUser.uid)])
+          .then(([adminRole, profile]) => {
+            if (generation !== authStateGeneration) return;
+            if (!profile) {
+              console.error("Signed-in Firebase account has no BharatiConnect user profile.");
+              void logoutUser();
+              return;
+            }
+            if (!profile.active) {
+              console.error("A deactivated Firebase account attempted to restore a session.");
+              void logoutUser();
+              return;
+            }
+            const normalized = normalizeUser({
+              ...profile,
+              id: firebaseUser.uid,
+              name: firebaseUser.displayName || profile.name,
+              email: firebaseUser.email || profile.email,
+              role: adminRole ?? "staff",
+            });
+            set({
+              authReady: true,
+              sessionUser: normalized,
+              adminUser: adminRole ? normalized : null,
+              adminAuthed: Boolean(adminRole),
+              staff: [],
+              books: [],
+              logs: [],
+              challenges: [],
+              badges: [],
+              notices: [],
+              posts: [],
+              videos: [],
+              suggestions: [],
+              holidays: [],
+              notifications: [],
+              audit: [],
+              todayLogged: false,
+              todayPagesRead: 0,
+              dayStates: {},
+            });
+            authDataUnsubscribe = subscribeToFirestore(
+              firebaseUser.uid,
+              Boolean(adminRole),
+              (partial) => {
+                if (Array.isArray(partial["logs"])) {
+                  const logs = partial["logs"] as ReadingLog[];
+                  const today = todayInKolkata();
+                  const userLogs = logs.filter((log) => log.userId === firebaseUser.uid);
+                  set((current) => ({
+                    ...partial,
+                    sessionUser: current.sessionUser
+                      ? { ...current.sessionUser, streak: calculateCurrentStreak(userLogs) }
+                      : null,
+                    todayLogged: userLogs.some((log) => log.date === today),
+                    todayPagesRead: userLogs
+                      .filter((log) => log.date === today)
+                      .reduce((total, log) => total + log.pages, 0),
+                    dayStates: Object.fromEntries(userLogs.map((log) => [log.date, "logged"])),
+                  }));
+                  return;
+                }
+                set(partial as Partial<AppState>);
+              },
+            );
+          })
+          .catch((error: unknown) => {
+            if (generation !== authStateGeneration) return;
+            console.error("Firebase session restore failed:", error);
+            set({ authReady: true });
+            void logoutUser();
+          });
+      });
     })().finally(() => {
       hydratingPromise = null;
     });

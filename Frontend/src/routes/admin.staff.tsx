@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Copy, Search, UserPlus } from "lucide-react";
+import { Search, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { Button } from "@/components/ui/button";
@@ -47,13 +47,14 @@ export const Route = createFileRoute("/admin/staff")({
 
 function StaffAdmin() {
   const { t, i18n } = useTranslation();
-  const { staff, departments, logs } = useAppState();
+  const { staff, departments, logs, sessionUser, adminUser } = useAppState();
   const [q, setQ] = useState("");
   const [dept, setDept] = useState("all");
   const [status, setStatus] = useState("all");
   const [detail, setDetail] = useState<User | null>(null);
   const [invite, setInvite] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", email: "", phone: "", departmentId: "d1" });
+  const [inviting, setInviting] = useState(false);
+  const [form, setForm] = useState({ name: "", email: "", phone: "", departmentId: "" });
 
   const rows = staff.filter(
     (s) =>
@@ -138,7 +139,7 @@ function StaffAdmin() {
                     onValueChange={(v) => setForm({ ...form, departmentId: v })}
                   >
                     <SelectTrigger className="h-11">
-                      <SelectValue />
+                      <SelectValue placeholder={t("profile.departmentLabel")} />
                     </SelectTrigger>
                     <SelectContent>
                       {departments.map((d) => (
@@ -151,30 +152,27 @@ function StaffAdmin() {
                 </div>
                 <Button
                   className="h-11 w-full"
-                  disabled={!form.name || !form.email}
-                  onClick={() => {
-                    setInvite(actions.addStaff(form));
-                    setForm({ name: "", email: "", phone: "", departmentId: "d1" });
+                  disabled={!form.name.trim() || !form.email.trim() || !form.departmentId || inviting}
+                  onClick={async () => {
+                    setInviting(true);
+                    setInvite(null);
+                    try {
+                      const user = await actions.addStaff(form);
+                      setInvite(user.email);
+                      setForm({ name: "", email: "", phone: "", departmentId: "" });
+                      toast.success(`Password setup email sent to ${user.email}`);
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : "Unable to invite this staff member.");
+                    } finally {
+                      setInviting(false);
+                    }
                   }}
                 >
-                  {t("common.add")}
+                  {inviting ? "Sending..." : t("common.add")}
                 </Button>
                 {invite && (
                   <div className="rounded-xl bg-muted p-3">
-                    <p className="text-xs font-medium">{t("admin.inviteLink")}</p>
-                    <div className="mt-1 flex items-center gap-2">
-                      <code className="min-w-0 flex-1 truncate text-[11px]">{invite}</code>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => {
-                          void navigator.clipboard.writeText(invite);
-                          toast.success("Copied");
-                        }}
-                      >
-                        <Copy className="size-4" />
-                      </Button>
-                    </div>
+                    <p className="text-xs font-medium">Password setup email sent to {invite}.</p>
                   </div>
                 )}
               </div>
@@ -213,16 +211,20 @@ function StaffAdmin() {
                     </span>
                   </TableCell>
                   <TableCell>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        actions.toggleStaffActive(s.id);
-                      }}
-                    >
-                      {s.active ? t("admin.deactivate") : t("admin.reactivate")}
-                    </Button>
+                    {(s.role === "staff" || adminUser?.role === "owner") && s.id !== sessionUser?.id && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void actions.toggleStaffActive(s.id).catch((error: unknown) => {
+                            toast.error(error instanceof Error ? error.message : "Unable to update this account.");
+                          });
+                        }}
+                      >
+                        {s.active ? t("admin.deactivate") : t("admin.reactivate")}
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

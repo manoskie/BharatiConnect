@@ -13,8 +13,8 @@ import {
   YAxis,
 } from "recharts";
 import { AdminShell } from "@/components/admin/AdminShell";
+import { getDateInIndia } from "@/lib/firebase-service";
 import { useAppState } from "@/lib/store";
-import { iso } from "@/lib/demo-data";
 
 export const Route = createFileRoute("/admin/")({
   head: () => ({
@@ -34,9 +34,9 @@ export const Route = createFileRoute("/admin/")({
 function Dashboard() {
   const { t, i18n } = useTranslation();
   const { staff, logs, departments } = useAppState();
-  const today = iso(new Date());
+  const today = getDateInIndia();
   const loggedToday = new Set(logs.filter((l) => l.date === today).map((l) => l.userId)).size;
-  const pct = Math.round((loggedToday / staff.length) * 100);
+  const pct = staff.length ? Math.round((loggedToday / staff.length) * 100) : 0;
 
   const buckets = [
     { name: "0", value: staff.filter((s) => s.streak === 0).length },

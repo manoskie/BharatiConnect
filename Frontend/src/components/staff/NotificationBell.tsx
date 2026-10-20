@@ -1,5 +1,6 @@
 import { Bell } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -43,7 +44,11 @@ export function NotificationBell() {
           {notifications.map((n) => (
             <button
               key={n.id}
-              onClick={() => actions.markNotificationRead(n.id)}
+              onClick={() =>
+                void actions.markNotificationRead(n.id).catch((error: unknown) =>
+                  toast.error(error instanceof Error ? error.message : "Unable to mark notification as read."),
+                )
+              }
               className={cn(
                 "glass w-full rounded-2xl p-3 text-left",
                 !n.read && "border-primary/40 bg-primary/5",

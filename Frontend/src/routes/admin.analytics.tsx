@@ -15,8 +15,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useReadingAnalytics } from "@/lib/queries";
+import { getDateInIndia } from "@/lib/firebase-service";
 import { useAppState } from "@/lib/store";
-import { daysAgo, iso } from "@/lib/demo-data";
 
 export const Route = createFileRoute("/admin/analytics")({
   head: () => ({
@@ -36,8 +36,8 @@ export const Route = createFileRoute("/admin/analytics")({
 function Analytics() {
   const { t, i18n } = useTranslation();
   const { departments } = useAppState();
-  const [from, setFrom] = useState(iso(daysAgo(30)));
-  const [to, setTo] = useState(iso(new Date()));
+  const [from, setFrom] = useState(getDateInIndia(-30));
+  const [to, setTo] = useState(getDateInIndia());
   const { data: rows = [] } = useReadingAnalytics(from, to);
 
   const exportCsv = () => {

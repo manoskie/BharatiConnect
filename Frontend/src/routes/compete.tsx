@@ -4,6 +4,7 @@ import { motion } from "motion/react";
 import confetti from "canvas-confetti";
 import { Award, Lock, Medal, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { StaffShell } from "@/components/staff/StaffShell";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -43,7 +44,7 @@ const badgeIcon: Record<string, string> = {
 
 function Compete() {
   const { t, i18n } = useTranslation();
-  const { challenges, badges, sessionUser } = useAppState();
+  const { challenges, badges, sessionUser, userActivity } = useAppState();
   const [scope, setScope] = useState<"department" | "individual">("department");
   const [period, setPeriod] = useState<"weekly" | "monthly">("weekly");
   const { data: rows = [] } = useLeaderboard(scope, period);
@@ -131,7 +132,7 @@ function Compete() {
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {c.progress}/{c.target}
                 </span>
-                {c.joined ? (
+                {c.joined || userActivity.joinedChallengeIds.includes(c.id) ? (
                   <span className="text-xs font-semibold text-success-foreground dark:text-success">
                     {t("compete.joined")}
                   </span>
@@ -139,8 +140,12 @@ function Compete() {
                   <Button
                     size="sm"
                     onClick={() => {
-                      actions.joinChallenge(c.id);
-                      void confetti({ particleCount: 60, spread: 60, origin: { y: 0.7 } });
+                      void actions
+                        .joinChallenge(c.id)
+                        .then(() => confetti({ particleCount: 60, spread: 60, origin: { y: 0.7 } }))
+                        .catch((error: unknown) =>
+                          toast.error(error instanceof Error ? error.message : "Unable to join challenge."),
+                        );
                     }}
                   >
                     {t("compete.join")}

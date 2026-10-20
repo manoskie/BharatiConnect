@@ -23,6 +23,7 @@ import { Route as AdminAdminsRouteImport } from './routes/admin.admins'
 import { Route as AdminAnalyticsRouteImport } from './routes/admin.analytics'
 import { Route as AdminAuditRouteImport } from './routes/admin.audit'
 import { Route as AdminBadgesRouteImport } from './routes/admin.badges'
+import { Route as AdminBooksRouteImport } from './routes/admin.books'
 import { Route as AdminChallengesRouteImport } from './routes/admin.challenges'
 import { Route as AdminContentRouteImport } from './routes/admin.content'
 import { Route as AdminDepartmentsRouteImport } from './routes/admin.departments'
@@ -102,6 +103,11 @@ const AdminBadgesRoute = AdminBadgesRouteImport.update({
   path: '/badges',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminBooksRoute = AdminBooksRouteImport.update({
+  id: '/books',
+  path: '/books',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminChallengesRoute = AdminChallengesRouteImport.update({
   id: '/challenges',
   path: '/challenges',
@@ -157,6 +163,7 @@ export interface FileRoutesByFullPath {
   '/admin/analytics': typeof AdminAnalyticsRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/badges': typeof AdminBadgesRoute
+  '/admin/books': typeof AdminBooksRoute
   '/admin/challenges': typeof AdminChallengesRoute
   '/admin/content': typeof AdminContentRoute
   '/admin/departments': typeof AdminDepartmentsRoute
@@ -180,6 +187,7 @@ export interface FileRoutesByTo {
   '/admin/analytics': typeof AdminAnalyticsRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/badges': typeof AdminBadgesRoute
+  '/admin/books': typeof AdminBooksRoute
   '/admin/challenges': typeof AdminChallengesRoute
   '/admin/content': typeof AdminContentRoute
   '/admin/departments': typeof AdminDepartmentsRoute
@@ -205,6 +213,7 @@ export interface FileRoutesById {
   '/admin/analytics': typeof AdminAnalyticsRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/badges': typeof AdminBadgesRoute
+  '/admin/books': typeof AdminBooksRoute
   '/admin/challenges': typeof AdminChallengesRoute
   '/admin/content': typeof AdminContentRoute
   '/admin/departments': typeof AdminDepartmentsRoute
@@ -231,6 +240,7 @@ export interface FileRouteTypes {
     | '/admin/analytics'
     | '/admin/audit'
     | '/admin/badges'
+    | '/admin/books'
     | '/admin/challenges'
     | '/admin/content'
     | '/admin/departments'
@@ -254,6 +264,7 @@ export interface FileRouteTypes {
     | '/admin/analytics'
     | '/admin/audit'
     | '/admin/badges'
+    | '/admin/books'
     | '/admin/challenges'
     | '/admin/content'
     | '/admin/departments'
@@ -278,6 +289,7 @@ export interface FileRouteTypes {
     | '/admin/analytics'
     | '/admin/audit'
     | '/admin/badges'
+    | '/admin/books'
     | '/admin/challenges'
     | '/admin/content'
     | '/admin/departments'
@@ -401,6 +413,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminBadgesRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/books': {
+      id: '/admin/books'
+      path: '/books'
+      fullPath: '/admin/books'
+      preLoaderRoute: typeof AdminBooksRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/challenges': {
       id: '/admin/challenges'
       path: '/challenges'
@@ -465,6 +484,7 @@ interface AdminRouteChildren {
   AdminAnalyticsRoute: typeof AdminAnalyticsRoute
   AdminAuditRoute: typeof AdminAuditRoute
   AdminBadgesRoute: typeof AdminBadgesRoute
+  AdminBooksRoute: typeof AdminBooksRoute
   AdminChallengesRoute: typeof AdminChallengesRoute
   AdminContentRoute: typeof AdminContentRoute
   AdminDepartmentsRoute: typeof AdminDepartmentsRoute
@@ -481,6 +501,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminAnalyticsRoute: AdminAnalyticsRoute,
   AdminAuditRoute: AdminAuditRoute,
   AdminBadgesRoute: AdminBadgesRoute,
+  AdminBooksRoute: AdminBooksRoute,
   AdminChallengesRoute: AdminChallengesRoute,
   AdminContentRoute: AdminContentRoute,
   AdminDepartmentsRoute: AdminDepartmentsRoute,

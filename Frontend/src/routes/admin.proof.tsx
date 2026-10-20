@@ -31,6 +31,7 @@ function ProofReview() {
   const queue = logs.filter((l) => l.proofOutcome === "needs_review");
   const [reason, setReason] = useState("");
   const [adjust, setAdjust] = useState({ name: "", date: iso(new Date()) });
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
 
   return (
     <AdminShell title={t("admin.proof")}>
@@ -51,19 +52,15 @@ function ProofReview() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <p className="mb-1 text-xs text-muted-foreground">Submitted photo</p>
-                  <img
-                    src={`https://picsum.photos/seed/${l.id}/500/360`}
-                    alt=""
-                    className="h-44 w-full rounded-2xl object-cover"
-                  />
+                  <div className="flex h-44 items-center justify-center rounded-2xl bg-muted p-4 text-center text-sm text-muted-foreground">
+                    Photo proof is not enabled in Release 1. No submitted image is available.
+                  </div>
                 </div>
                 <div>
                   <p className="mb-1 text-xs text-muted-foreground">Previous photo</p>
-                  <img
-                    src={`https://picsum.photos/seed/${l.id}prev/500/360`}
-                    alt=""
-                    className="h-44 w-full rounded-2xl object-cover"
-                  />
+                  <div className="flex h-44 items-center justify-center rounded-2xl bg-muted p-4 text-center text-sm text-muted-foreground">
+                    Historical photo proof is not available.
+                  </div>
                 </div>
               </div>
               <p className="text-sm">
@@ -79,9 +76,17 @@ function ProofReview() {
                 />
                 <Button
                   className="h-10 gap-2"
-                  onClick={() => {
-                    actions.reviewProof(l.id, "accepted");
-                    toast.success(t("common.accept"));
+                  disabled={reviewingId === l.id}
+                  onClick={async () => {
+                    setReviewingId(l.id);
+                    try {
+                      await actions.reviewProof(l.id, "accepted");
+                      toast.success(t("common.accept"));
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : "Unable to save proof review.");
+                    } finally {
+                      setReviewingId(null);
+                    }
                   }}
                 >
                   <Check className="size-4" /> {t("common.accept")}
@@ -89,9 +94,18 @@ function ProofReview() {
                 <Button
                   variant="outline"
                   className="h-10 gap-2"
-                  onClick={() => {
-                    actions.reviewProof(l.id, "retake", reason);
-                    setReason("");
+                  disabled={reviewingId === l.id || !reason.trim()}
+                  onClick={async () => {
+                    setReviewingId(l.id);
+                    try {
+                      await actions.reviewProof(l.id, "retake", reason);
+                      setReason("");
+                      toast.success("Retake requested.");
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : "Unable to save proof review.");
+                    } finally {
+                      setReviewingId(null);
+                    }
                   }}
                 >
                   <RotateCcw className="size-4" /> {t("admin.retake")}
@@ -103,6 +117,10 @@ function ProofReview() {
 
         <div className="glass h-fit space-y-3 rounded-3xl p-5">
           <p className="text-sm font-semibold">{t("admin.adjustMissedDay")}</p>
+          <p className="text-xs text-muted-foreground">
+            Manual reading adjustments require a trusted server-side audit workflow and are not
+            available in this Firebase-only release.
+          </p>
           <div className="space-y-1.5">
             <Label>Staff name</Label>
             <Input
@@ -122,11 +140,13 @@ function ProofReview() {
           </div>
           <Button
             className="h-10 w-full"
-            disabled={!adjust.name}
-            onClick={() => {
-              actions.adjustMissedDay(adjust.date, adjust.name);
-              toast.success(t("admin.audit"));
-              setAdjust({ name: "", date: iso(new Date()) });
+            disabled
+            onClick={async () => {
+              try {
+                await actions.adjustMissedDay(adjust.date, adjust.name);
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "Unable to adjust the reading day.");
+              }
             }}
           >
             {t("common.save")}

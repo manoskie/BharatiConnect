@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Plus, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,6 +39,7 @@ function Departments() {
     nameEn: "",
     nameMr: "",
   });
+  const [saving, setSaving] = useState(false);
 
   return (
     <AdminShell title={t("admin.departments")}>
@@ -64,10 +66,21 @@ function Departments() {
           <div className="flex gap-2">
             <Button
               className="h-11 flex-1 gap-2"
-              disabled={!form.nameEn || !form.nameMr}
-              onClick={() => {
-                actions.saveDepartment(form);
-                setForm({ nameEn: "", nameMr: "" });
+              disabled={!form.nameEn.trim() || !form.nameMr.trim() || saving}
+              onClick={async () => {
+                setSaving(true);
+                try {
+                  await actions.saveDepartment({
+                    ...form,
+                    nameEn: form.nameEn.trim(),
+                    nameMr: form.nameMr.trim(),
+                  });
+                  setForm({ nameEn: "", nameMr: "" });
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : "Unable to save department.");
+                } finally {
+                  setSaving(false);
+                }
               }}
             >
               <Plus className="size-4" /> {t("common.save")}
@@ -109,7 +122,19 @@ function Departments() {
                     <Button
                       size="icon"
                       variant="ghost"
-                      onClick={() => actions.deleteDepartment(d.id)}
+                      disabled={saving || staff.some((user) => user.departmentId === d.id)}
+                      title={
+                        staff.some((user) => user.departmentId === d.id)
+                          ? "This department cannot be deleted while user accounts are assigned to it."
+                          : undefined
+                      }
+                      onClick={async () => {
+                        try {
+                          await actions.deleteDepartment(d.id);
+                        } catch (error) {
+                          toast.error(error instanceof Error ? error.message : "Unable to delete department.");
+                        }
+                      }}
                     >
                       <Trash2 className="size-4 text-destructive" />
                     </Button>

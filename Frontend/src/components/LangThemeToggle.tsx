@@ -1,4 +1,5 @@
 import { Languages, Moon, Sun } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { actions, useAppState } from "@/lib/store";
 
@@ -10,7 +11,11 @@ export function LangThemeToggle() {
         variant="ghost"
         size="sm"
         className="gap-1.5"
-        onClick={() => actions.setLanguage(language === "mr" ? "en" : "mr")}
+        onClick={() =>
+          void actions.setLanguage(language === "mr" ? "en" : "mr").catch((error: unknown) =>
+            toast.error(error instanceof Error ? error.message : "Unable to save language preference."),
+          )
+        }
         aria-label="Switch language"
       >
         <Languages className="size-4" />

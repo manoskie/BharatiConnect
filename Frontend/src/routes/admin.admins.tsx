@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,7 +31,8 @@ export const Route = createFileRoute("/admin/admins")({
 function Admins() {
   const { t, i18n } = useTranslation();
   const { staff, departments, adminUser } = useAppState();
-  const [form, setForm] = useState({ name: "", email: "", departmentId: "d1" });
+  const [form, setForm] = useState({ name: "", email: "", departmentId: "" });
+  const [creating, setCreating] = useState(false);
   const isOwner = adminUser?.role === "owner";
   const admins = staff.filter((s) => s.role === "admin" || s.role === "owner");
 
@@ -74,7 +76,7 @@ function Admins() {
               onValueChange={(v) => setForm({ ...form, departmentId: v })}
             >
               <SelectTrigger className="h-11">
-                <SelectValue />
+                <SelectValue placeholder={t("profile.departmentLabel")} />
               </SelectTrigger>
               <SelectContent>
                 {departments.map((d) => (
@@ -87,13 +89,21 @@ function Admins() {
           </div>
           <Button
             className="h-11 w-full"
-            disabled={!form.name || !form.email}
-            onClick={() => {
-              actions.createAdmin(form);
-              setForm({ name: "", email: "", departmentId: "d1" });
+            disabled={!form.name.trim() || !form.email.trim() || !form.departmentId || creating}
+            onClick={async () => {
+              setCreating(true);
+              try {
+                const user = await actions.createAdmin(form);
+                setForm({ name: "", email: "", departmentId: "" });
+                toast.success(`Password setup email sent to ${user.email}`);
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "Unable to create administrator.");
+              } finally {
+                setCreating(false);
+              }
             }}
           >
-            {t("common.add")}
+            {creating ? "Sending..." : t("common.add")}
           </Button>
         </div>
 
@@ -110,7 +120,11 @@ function Admins() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => actions.setStaffRole(a.id, "staff")}
+                  onClick={() => {
+                    void actions.setStaffRole(a.id, "staff").catch((error: unknown) => {
+                      toast.error(error instanceof Error ? error.message : "Unable to remove administrator access.");
+                    });
+                  }}
                 >
                   {t("admin.demote")}
                 </Button>

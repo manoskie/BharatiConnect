@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BookPlus, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,42 +22,120 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { actions } from "@/lib/store";
-import type { BookStatus, Language } from "@/lib/types";
+import type { BookLanguage, BookStatus } from "@/lib/types";
 
-const catalogue = [
-  {
-    title: "व्यक्ती आणि वल्ली",
-    author: "पु. ल. देशपांडे",
-    totalPages: 232,
-    language: "mr" as Language,
-  },
-  { title: "कोसला", author: "भालचंद्र नेमाडे", totalPages: 280, language: "mr" as Language },
-  { title: "ययाति", author: "वि. स. खांडेकर", totalPages: 396, language: "mr" as Language },
-  { title: "Deep Work", author: "Cal Newport", totalPages: 304, language: "en" as Language },
-  { title: "Factfulness", author: "Hans Rosling", totalPages: 342, language: "en" as Language },
-  {
-    title: "Man's Search for Meaning",
-    author: "Viktor Frankl",
-    totalPages: 184,
-    language: "en" as Language,
-  },
-];
+interface GoogleBookResult {
+  id: string;
+  volumeInfo?: {
+    title?: string;
+    authors?: string[];
+    pageCount?: number;
+    language?: string;
+  };
+}
 
 export function AddBookDialog({ defaultStatus = "want_to_read" }: { defaultStatus?: BookStatus }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [q, setQ] = useState("");
-  const [manual, setManual] = useState({ title: "", author: "", totalPages: "", language: "mr" });
+  const [results, setResults] = useState<
+    { googleBooksId: string; title: string; author: string; totalPages: number; language: BookLanguage }[]
+  >([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [manual, setManual] = useState({
+    title: "",
+    author: "",
+    totalPages: "",
+    language: "mr" as BookLanguage,
+  });
 
-  const results = catalogue.filter((b) =>
-    (b.title + b.author).toLowerCase().includes(q.toLowerCase()),
-  );
+  useEffect(() => {
+    const query = q.trim();
+    if (query.length < 2) {
+      setResults([]);
+      setSearchError(null);
+      return;
+    }
 
-  const add = (book: { title: string; author: string; totalPages: number; language: Language }) => {
-    actions.addBook({ ...book, status: defaultStatus });
-    setOpen(false);
-    setQ("");
-    setManual({ title: "", author: "", totalPages: "", language: "mr" });
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      setSearchError(null);
+      const params = new URLSearchParams({ q: query, maxResults: "10" });
+      const apiKey = import.meta.env.VITE_GOOGLE_BOOKS_API_KEY;
+      if (apiKey) params.set("key", apiKey);
+      void fetch(
+        `https://www.googleapis.com/books/v1/volumes?${params.toString()}`,
+        { signal: controller.signal },
+      )
+        .then(async (response) => {
+          if (response.status === 429) {
+            setSearchError("Google Books is rate-limited. Try adding the book manually.");
+            return { items: [] };
+          }
+          if (!response.ok) throw new Error(`Google Books search failed (${response.status}).`);
+          const payload = (await response.json()) as { items?: GoogleBookResult[] };
+          const books = (payload.items ?? []).flatMap((item) => {
+            const info = item.volumeInfo;
+            const language = info?.language;
+            if (
+              !info?.title ||
+              !info.pageCount ||
+              info.pageCount < 1 ||
+              (language !== "en" && language !== "mr" && language !== "hi")
+            ) {
+              return [];
+            }
+            const supportedLanguage: BookLanguage = language;
+            return [
+              {
+                googleBooksId: item.id,
+                title: info.title,
+                author: info.authors?.join(", ") || "Unknown author",
+                totalPages: info.pageCount,
+                language: supportedLanguage,
+              },
+            ];
+          });
+          setResults(books);
+          if (books.length === 0) {
+            setSearchError("No usable Google Books results. Try adding the book manually.");
+          }
+          return payload;
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          setSearchError(error instanceof Error ? error.message : "Google Books search failed.");
+        })
+        .finally(() => setSearching(false));
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [q]);
+
+  const add = async (book: {
+    title: string;
+    author: string;
+    totalPages: number;
+    language: BookLanguage;
+    sourceId?: string;
+  }) => {
+    setSaving(true);
+    try {
+      await actions.addBook({ ...book, status: defaultStatus });
+      setOpen(false);
+      setQ("");
+      setManual({ title: "", author: "", totalPages: "", language: "mr" });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to add this book.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -89,8 +168,9 @@ export function AddBookDialog({ defaultStatus = "want_to_read" }: { defaultStatu
             </div>
             {results.map((b) => (
               <button
-                key={b.title}
-                onClick={() => add(b)}
+                key={b.googleBooksId}
+                disabled={saving}
+                onClick={() => void add({ ...b, sourceId: `google_${b.googleBooksId}` })}
                 className="flex w-full items-center gap-3 rounded-2xl border border-border p-3 text-left"
               >
                 <span className="size-12 shrink-0 rounded-lg bg-primary/20" />
@@ -103,7 +183,14 @@ export function AddBookDialog({ defaultStatus = "want_to_read" }: { defaultStatu
               </button>
             ))}
             {results.length === 0 && (
-              <p className="text-sm text-muted-foreground">{t("common.none")}</p>
+              <p className="text-sm text-muted-foreground">
+                {searching
+                  ? "Searching Google Books..."
+                  : searchError ||
+                    (q.trim().length < 2
+                      ? "Enter at least 2 characters to search."
+                      : "No usable Google Books results. Try manual entry.")}
+              </p>
             )}
           </TabsContent>
 
@@ -138,13 +225,18 @@ export function AddBookDialog({ defaultStatus = "want_to_read" }: { defaultStatu
                 <Label>{t("reading.language")}</Label>
                 <Select
                   value={manual.language}
-                  onValueChange={(v) => setManual({ ...manual, language: v })}
+                  onValueChange={(v) => {
+                    if (v === "en" || v === "mr" || v === "hi") {
+                      setManual({ ...manual, language: v });
+                    }
+                  }}
                 >
                   <SelectTrigger className="h-12">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="mr">मराठी</SelectItem>
+                    <SelectItem value="hi">हिन्दी</SelectItem>
                     <SelectItem value="en">English</SelectItem>
                   </SelectContent>
                 </Select>
@@ -152,15 +244,20 @@ export function AddBookDialog({ defaultStatus = "want_to_read" }: { defaultStatu
             </div>
             <Button
               className="h-12 w-full"
-              disabled={!manual.title || !manual.totalPages}
-              onClick={() =>
-                add({
+              disabled={!manual.title.trim() || !manual.author.trim() || !manual.totalPages || saving}
+              onClick={() => {
+                const totalPages = Number(manual.totalPages);
+                if (!Number.isInteger(totalPages) || totalPages < 1) {
+                  toast.error("Enter a valid total page count.");
+                  return;
+                }
+                void add({
                   title: manual.title,
                   author: manual.author,
-                  totalPages: Number(manual.totalPages),
-                  language: manual.language as Language,
-                })
-              }
+                  totalPages,
+                  language: manual.language,
+                });
+              }}
             >
               {t("common.add")}
             </Button>

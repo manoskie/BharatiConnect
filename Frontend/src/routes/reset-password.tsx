@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { KeyRound, CheckCircle2 } from "lucide-react";
@@ -7,10 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LangThemeToggle } from "@/components/LangThemeToggle";
-import { api } from "@/lib/api";
+import { completePasswordReset, validatePasswordResetCode } from "@/lib/firebase";
 
 export const Route = createFileRoute("/reset-password")({
-  validateSearch: z.object({ token: z.string().optional() }),
+  validateSearch: z.object({
+    mode: z.string().optional(),
+    oobCode: z.string().optional(),
+  }),
   head: () => ({
     meta: [
       { title: "Reset Password — BharatiConnect" },
@@ -24,33 +27,44 @@ export const Route = createFileRoute("/reset-password")({
 
 function ResetPassword() {
   const { t } = useTranslation();
-  const { token } = Route.useSearch();
+  const { mode, oobCode } = Route.useSearch();
   const navigate = useNavigate();
   const [pw, setPw] = useState("");
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const valid = pw.length >= 8 && pw === confirm && !!token;
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
+  const [checkingCode, setCheckingCode] = useState(true);
+  const valid =
+    pw.length >= 8 && pw === confirm && !!oobCode && mode === "resetPassword" && !!accountEmail;
+
+  useEffect(() => {
+    if (!oobCode || mode !== "resetPassword") {
+      setErrorMsg("Password reset link is missing or invalid. Request a new reset email.");
+      setCheckingCode(false);
+      return;
+    }
+    void validatePasswordResetCode(oobCode)
+      .then(setAccountEmail)
+      .catch((error: unknown) => {
+        setErrorMsg(error instanceof Error ? error.message : "This password reset link is invalid or expired.");
+      })
+      .finally(() => setCheckingCode(false));
+  }, [mode, oobCode]);
 
   const handleReset = async () => {
     if (!valid || loading) return;
     setErrorMsg(null);
     setLoading(true);
     try {
-      const res = await api.post("/auth/reset-password", {
-        token,
-        password: pw,
-      });
-      if (res.data) {
-        setSuccess(true);
-        setTimeout(() => {
-          void navigate({ to: "/login" });
-        }, 2500);
-      }
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || "Failed to reset password. The link may have expired.";
-      setErrorMsg(msg);
+      await completePasswordReset(oobCode!, pw);
+      setSuccess(true);
+      setTimeout(() => {
+        void navigate({ to: "/login" });
+      }, 2500);
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : "Failed to reset password. The link may have expired.");
     } finally {
       setLoading(false);
     }
@@ -72,9 +86,13 @@ function ResetPassword() {
           </div>
         </div>
 
-        {!token && (
+        {accountEmail && (
+          <p className="text-xs text-muted-foreground">Set a new password for {accountEmail}.</p>
+        )}
+
+        {!oobCode && (
           <p className="rounded-xl bg-destructive/10 p-3 text-xs text-destructive">
-            Reset token missing — please use the link provided by your administrator.
+            Reset code missing — request a new password reset email.
           </p>
         )}
 
@@ -131,10 +149,10 @@ function ResetPassword() {
             )}
             <Button
               className="h-12 w-full"
-              disabled={!valid || loading}
+              disabled={!valid || loading || checkingCode}
               onClick={handleReset}
             >
-              {loading ? "..." : t("auth.resetPassword", "Reset Password")}
+              {checkingCode ? "Checking link..." : loading ? "..." : t("auth.resetPassword", "Reset Password")}
             </Button>
             <div className="text-center">
               <Link to="/login" className="text-xs text-muted-foreground hover:underline">

@@ -1,119 +1,207 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function isAdmin() {
-      return isSignedIn() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (request.auth.token.email == "rahilpatel112399@gmail.com" && request.auth.token.email_verified == true)
-      );
+    function isActiveUser() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
     }
 
-    // Default deny catch-all
+    function isAdmin() {
+      return isActiveUser()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'owner'];
+    }
+
+    function isOwner() {
+      return isAdmin()
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    function validUserBook() {
+      return request.resource.data.userId == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.author is string
+        && request.resource.data.totalPages is int
+        && request.resource.data.totalPages > 0
+        && request.resource.data.currentPage is int
+        && request.resource.data.currentPage >= 0
+        && request.resource.data.currentPage <= request.resource.data.totalPages
+        && request.resource.data.status in ['want_to_read', 'reading', 'finished'];
+    }
+
+    function validCatalogBook() {
+      return request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.author is string
+        && request.resource.data.author.size() > 0
+        && request.resource.data.totalPages is int
+        && request.resource.data.totalPages > 0
+        && request.resource.data.language in ['en', 'mr', 'hi']
+        && request.resource.data.coverUrl is string
+        && request.resource.data.staffPick is bool
+        && request.resource.data.createdBy == request.auth.uid;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Admins metadata collection
     match /admins/{userId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create, update, delete: if isOwner();
     }
 
-    // Users collection
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
-      allow update: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAdmin()
+        && (request.resource.data.role == 'staff'
+          || (isOwner() && request.resource.data.role == 'admin'))
+        && request.resource.data.active is bool;
+      allow update: if isOwner()
+        || (isAdmin() && resource.data.role == 'staff')
+        || (isActiveUser()
+          && request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['language', 'reminderTime']));
+      allow delete: if isOwner();
+    }
+
+    match /departments/{departmentId} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /books/{bookId} {
+      allow read: if isActiveUser();
+      allow create: if isAdmin() && validCatalogBook();
+      allow update: if isAdmin()
+        && validCatalogBook()
+        && request.resource.data.createdBy == resource.data.createdBy;
       allow delete: if isAdmin();
     }
 
-    // Departments
-    match /departments/{departmentId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+    match /userBooks/{userBookId} {
+      allow read: if isActiveUser()
+        && (userBookId.matches('^' + request.auth.uid + '_.*$')
+          || resource.data.userId == request.auth.uid
+          || isAdmin());
+      allow create: if isActiveUser()
+        && userBookId == request.auth.uid + '_' + request.resource.data.id
+        && validUserBook();
+      allow update: if isActiveUser()
+        && resource.data.userId == request.auth.uid
+        && userBookId == request.auth.uid + '_' + request.resource.data.id
+        && validUserBook()
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.title == resource.data.title
+        && request.resource.data.author == resource.data.author
+        && request.resource.data.totalPages == resource.data.totalPages;
+      allow delete: if isActiveUser()
+        && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // Book catalog
-    match /books/{bookId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn() && isValidId(bookId);
-    }
-
-    // Reading Logs
     match /reading_logs/{logId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(logId) && incoming().userId == request.auth.uid;
-      allow update: if isSignedIn() && isValidId(logId) && (existing().userId == request.auth.uid || isAdmin());
-      allow delete: if isSignedIn() && isValidId(logId) && (existing().userId == request.auth.uid || isAdmin());
+      allow read: if request.auth != null
+        && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if request.auth != null
+        && (logId.matches('^' + request.auth.uid + '.*$')
+          || request.resource.data.userId == request.auth.uid);
+      allow update: if (request.auth != null
+        && resource.data.userId == request.auth.uid
+        && (logId.matches('^' + request.auth.uid + '.*$')
+          || request.resource.data.userId == request.auth.uid))
+        || (isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['proofOutcome', 'proofReviewReason'])
+          && request.resource.data.proofOutcome in ['accepted', 'retake', 'needs_review']
+          && (!('proofReviewReason' in request.resource.data)
+            || request.resource.data.proofReviewReason is string
+              && request.resource.data.proofReviewReason.size() <= 280));
+      allow delete: if isAdmin();
     }
 
-    // Challenges
     match /challenges/{challengeId} {
-      allow read: if isSignedIn();
-      allow create, delete: if isAdmin();
-      allow update: if isSignedIn() && isValidId(challengeId);
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
     }
 
-    // Notices
     match /notices/{noticeId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
     }
 
-    // Community Posts
     match /posts/{postId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(postId);
-      allow update, delete: if isAdmin();
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
     }
 
-    // Videos
     match /videos/{videoId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
     }
 
-    // Suggestions
     match /suggestions/{suggestionId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(suggestionId);
+      allow read: if isAdmin()
+        || (isActiveUser() && resource.data.userId == request.auth.uid);
+      allow create: if isActiveUser() && request.resource.data.userId == request.auth.uid;
       allow update, delete: if isAdmin();
     }
 
-    // Holidays
     match /holidays/{holidayId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
     }
 
-    // Settings
     match /settings/{settingId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin();
     }
 
-    // Takeaways
     match /takeaways/{takeawayId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(takeawayId);
+      allow read: if isActiveUser()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isActiveUser() && request.resource.data.userId == request.auth.uid;
       allow update, delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isActiveUser() && resource.data.userId == request.auth.uid;
+      allow create: if isAdmin();
+      allow update: if isActiveUser()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
+      allow delete: if isAdmin();
+    }
+
+    match /userActivity/{userId} {
+      allow read: if isActiveUser() && request.auth.uid == userId;
+      allow create: if isActiveUser()
+        && request.auth.uid == userId
+        && request.resource.data.userId == userId
+        && request.resource.data.keys().hasOnly([
+          'userId', 'readNoticeIds', 'watchedVideoIds', 'joinedChallengeIds'
+        ])
+        && (!('readNoticeIds' in request.resource.data) || request.resource.data.readNoticeIds is list)
+        && (!('watchedVideoIds' in request.resource.data) || request.resource.data.watchedVideoIds is list)
+        && (!('joinedChallengeIds' in request.resource.data) || request.resource.data.joinedChallengeIds is list);
+      allow update: if isActiveUser()
+        && request.auth.uid == userId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'readNoticeIds', 'watchedVideoIds', 'joinedChallengeIds'
+        ])
+        && (!('readNoticeIds' in request.resource.data) || request.resource.data.readNoticeIds is list)
+        && (!('watchedVideoIds' in request.resource.data) || request.resource.data.watchedVideoIds is list)
+        && (!('joinedChallengeIds' in request.resource.data) || request.resource.data.joinedChallengeIds is list);
+      allow delete: if isOwner();
+    }
+
+    match /auditLogs/{auditId} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
     }
   }
 }
