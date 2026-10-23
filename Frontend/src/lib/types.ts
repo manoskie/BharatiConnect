@@ -37,6 +37,8 @@ export interface User {
   departmentId: string;
   active: boolean;
   streak: number;
+  currentStreak?: number | undefined;
+  streakCount?: number | undefined;
   points: number;
   level: number;
   language: Language;
@@ -168,6 +170,9 @@ export interface HolidayEntry {
   type: HolidayType;
   labelEn: string;
   labelMr: string;
+  title?: string | undefined;
+  createdBy?: string | undefined;
+  createdAt?: string | undefined;
   userId?: string | undefined;
 }
 

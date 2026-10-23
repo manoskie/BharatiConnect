@@ -1,9 +1,18 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { LogOut, Mail, Phone, Users } from "lucide-react";
+import { LogOut, Mail, Pencil, Phone, Users } from "lucide-react";
 import { StaffShell } from "@/components/staff/StaffShell";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -32,9 +41,19 @@ export const Route = createFileRoute("/profile")({
 function Profile() {
   const { t, i18n } = useTranslation();
   const { sessionUser, departments, staff, language, theme, notifications } = useAppState();
+  const [editOpen, setEditOpen] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileForm, setProfileForm] = useState({ name: "", phone: "" });
   const liveNotifications = notifications;
   const liveStaff = staff;
   const dept = departments.find((d) => d.id === sessionUser?.departmentId);
+
+  useEffect(() => {
+    setProfileForm({
+      name: sessionUser?.name ?? "",
+      phone: sessionUser?.phone ?? "",
+    });
+  }, [sessionUser?.name, sessionUser?.phone]);
 
   return (
     <StaffShell>
@@ -53,16 +72,110 @@ function Profile() {
               {i18n.language === "mr" ? dept?.nameMr : dept?.nameEn}
             </p>
           </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="ml-auto shrink-0"
+            onClick={() => setEditOpen(true)}
+          >
+            <Pencil className="size-4" />
+            {t("profile.editProfile")}
+          </Button>
         </div>
 
-        <div className="glass space-y-2 rounded-3xl p-5 text-sm">
-          <p className="flex items-center gap-2">
-            <Mail className="size-4 text-muted-foreground" /> {sessionUser?.email}
-          </p>
-          <p className="flex items-center gap-2">
-            <Phone className="size-4 text-muted-foreground" /> {sessionUser?.phone}
-          </p>
+        <div className="glass grid gap-3 rounded-3xl p-5 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="profile-email">{t("profile.email")}</Label>
+            <div className="relative">
+              <Mail className="absolute top-3 left-3 size-4 text-muted-foreground" />
+              <Input
+                id="profile-email"
+                className="pl-9"
+                value={sessionUser?.email ?? ""}
+                readOnly
+                aria-readonly="true"
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="profile-phone">{t("profile.phone")}</Label>
+            <div className="relative">
+              <Phone className="absolute top-3 left-3 size-4 text-muted-foreground" />
+              <Input
+                id="profile-phone"
+                className="pl-9"
+                value={sessionUser?.phone ?? ""}
+                readOnly
+                aria-readonly="true"
+              />
+            </div>
+          </div>
         </div>
+
+        <Dialog open={editOpen} onOpenChange={(open) => !savingProfile && setEditOpen(open)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("profile.editProfile")}</DialogTitle>
+              <DialogDescription>{t("profile.editProfileDescription")}</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-profile-name">{t("profile.name")}</Label>
+                <Input
+                  id="edit-profile-name"
+                  value={profileForm.name}
+                  maxLength={100}
+                  onChange={(event) =>
+                    setProfileForm((form) => ({ ...form, name: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-profile-email">{t("profile.email")}</Label>
+                <Input
+                  id="edit-profile-email"
+                  value={sessionUser?.email ?? ""}
+                  readOnly
+                  aria-readonly="true"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-profile-phone">{t("profile.phone")}</Label>
+                <Input
+                  id="edit-profile-phone"
+                  type="tel"
+                  value={profileForm.phone}
+                  maxLength={30}
+                  onChange={(event) =>
+                    setProfileForm((form) => ({ ...form, phone: event.target.value }))
+                  }
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                disabled={savingProfile || !profileForm.name.trim()}
+                onClick={async () => {
+                  setSavingProfile(true);
+                  try {
+                    await actions.updateOwnProfile(profileForm);
+                    setEditOpen(false);
+                    toast.success(t("profile.profileUpdated"));
+                  } catch (error) {
+                    toast.error(
+                      error instanceof Error ? error.message : t("profile.profileUpdateFailed"),
+                    );
+                  } finally {
+                    setSavingProfile(false);
+                  }
+                }}
+              >
+                {savingProfile ? t("common.loading") : t("common.save")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <div className="glass space-y-4 rounded-3xl p-5">
           <div className="space-y-2">

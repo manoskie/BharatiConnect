@@ -1,20 +1,15 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 import {
-  BadgeCheck,
+  ArrowLeft,
   BookOpen,
   Building2,
-  CalendarDays,
   ChevronLeft,
   ChevronRight,
-  FileText,
   Gauge,
-  Image,
   LogOut,
   ScrollText,
-  Settings,
   ShieldCheck,
-  Target,
   Users,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -28,15 +23,6 @@ const items = [
   { to: "/admin", icon: Gauge, key: "admin.dashboard", exact: true },
   { to: "/admin/staff", icon: Users, key: "admin.staff" },
   { to: "/admin/departments", icon: Building2, key: "admin.departments" },
-  { to: "/admin/books", icon: BookOpen, key: "admin.books" },
-  { to: "/admin/analytics", icon: BookOpen, key: "admin.analytics" },
-  { to: "/admin/proof", icon: Image, key: "admin.proof" },
-  { to: "/admin/challenges", icon: Target, key: "admin.challenges" },
-  { to: "/admin/badges", icon: BadgeCheck, key: "admin.badges" },
-  { to: "/admin/content", icon: FileText, key: "admin.content" },
-  { to: "/admin/holidays", icon: CalendarDays, key: "admin.holidays" },
-  { to: "/admin/settings", icon: Settings, key: "admin.settings" },
-  { to: "/admin/reports", icon: ScrollText, key: "admin.reports" },
   { to: "/admin/audit", icon: ScrollText, key: "admin.audit" },
   { to: "/admin/admins", icon: ShieldCheck, key: "admin.owners" },
 ] as const;
@@ -61,6 +47,14 @@ export function AdminShell({ title, children }: { title: string; children: React
             collapsed && "justify-center p-2",
           )}
         >
+          <Link
+            to="/"
+            className="flex size-10 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label={t("nav.backToApp")}
+            title={t("nav.backToApp")}
+          >
+            <ArrowLeft className="size-4" />
+          </Link>
           {!collapsed && (
             <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
               <BookOpen className="size-4" />
@@ -105,6 +99,17 @@ export function AdminShell({ title, children }: { title: string; children: React
           })}
         </nav>
         <div className="border-t border-border/60 p-3">
+          <Link
+            to="/"
+            className={cn(
+              "flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/10",
+              collapsed && "justify-center px-2",
+            )}
+            title={t("nav.backToApp")}
+          >
+            <ArrowLeft className="size-4 shrink-0" />
+            {!collapsed && <span>{t("nav.backToApp")}</span>}
+          </Link>
           {!collapsed && <p className="truncate text-xs font-medium">{adminUser?.name}</p>}
           <Button
             variant="ghost"

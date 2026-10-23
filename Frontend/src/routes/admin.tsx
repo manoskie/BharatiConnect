@@ -1,8 +1,7 @@
-import { Outlet, createFileRoute } from "@tanstack/react-router";
+import { Navigate, Outlet, createFileRoute } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { LoginCard } from "@/routes/login";
-import { LangThemeToggle } from "@/components/LangThemeToggle";
 import { useAppState } from "@/lib/store";
+import { LoaderCircle } from "lucide-react";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -23,22 +22,36 @@ export const Route = createFileRoute("/admin")({
 });
 
 function AdminLayout() {
-  const { authReady, adminAuthed, adminUser } = useAppState();
-  const { t } = useTranslation();
-  const allowed = adminAuthed && (adminUser?.role === "admin" || adminUser?.role === "owner");
+  return (
+    <AdminRoute>
+      <Outlet />
+    </AdminRoute>
+  );
+}
 
-  if (!allowed) {
-    if (!authReady) return null;
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { authReady, sessionUser, adminAuthed, adminUser } = useAppState();
+  const { t } = useTranslation();
+  const allowed =
+    authReady &&
+    !!sessionUser &&
+    adminAuthed &&
+    (adminUser?.role === "admin" || adminUser?.role === "owner");
+
+  if (!authReady) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gradient-to-br from-brand-soft/60 via-background to-background p-6">
-        <div className="flex items-center gap-2">
-          <LangThemeToggle />
-        </div>
-        <p className="text-sm text-muted-foreground">{t("nav.adminPortal")}</p>
-        <LoginCard admin />
+      <div
+        className="flex min-h-screen items-center justify-center gap-3 bg-background"
+        role="status"
+        aria-live="polite"
+      >
+        <LoaderCircle className="size-5 animate-spin text-primary" />
+        <span className="text-sm text-muted-foreground">{t("common.loading")}</span>
       </div>
     );
   }
 
-  return <Outlet />;
+  if (!allowed) return <Navigate to="/reading" replace />;
+
+  return <>{children}</>;
 }

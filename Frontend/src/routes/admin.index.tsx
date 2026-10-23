@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { AdminShell } from "@/components/admin/AdminShell";
+import { AdminDashboard } from "@/components/admin/AdminDashboard";
 import { getDateInIndia } from "@/lib/firebase-service";
 import { useAppState } from "@/lib/store";
 
@@ -66,62 +67,65 @@ function Dashboard() {
 
   return (
     <AdminShell title={t("admin.dashboard")}>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="glass rounded-3xl p-6">
-          <p className="text-sm text-muted-foreground">{t("admin.loggedToday")}</p>
-          <p className="mt-2 text-4xl font-bold tabular-nums">
-            {loggedToday}
-            <span className="text-lg text-muted-foreground"> / {staff.length}</span>
-          </p>
-          <div className="mt-4 h-3 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+      <div className="space-y-4">
+        <AdminDashboard />
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="glass rounded-3xl p-6">
+            <p className="text-sm text-muted-foreground">{t("admin.loggedToday")}</p>
+            <p className="mt-2 text-4xl font-bold tabular-nums">
+              {loggedToday}
+              <span className="text-lg text-muted-foreground"> / {staff.length}</span>
+            </p>
+            <div className="mt-4 h-3 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">{pct}%</p>
           </div>
-          <p className="mt-2 text-xs text-muted-foreground">{pct}%</p>
-        </div>
 
-        <div className="glass rounded-3xl p-6 lg:col-span-2">
-          <p className="text-sm font-medium">{t("admin.streakDistribution")}</p>
-          <div className="mt-4 h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={buckets}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                <XAxis dataKey="name" fontSize={12} />
-                <YAxis fontSize={12} allowDecimals={false} />
-                <RTooltip />
-                <Bar dataKey="value" radius={[6, 6, 0, 0]} fill="#4F46E5" />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="glass rounded-3xl p-6 lg:col-span-2">
+            <p className="text-sm font-medium">{t("admin.streakDistribution")}</p>
+            <div className="mt-4 h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={buckets}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                  <XAxis dataKey="name" fontSize={12} />
+                  <YAxis fontSize={12} allowDecimals={false} />
+                  <RTooltip />
+                  <Bar dataKey="value" radius={[6, 6, 0, 0]} fill="#4F46E5" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-        </div>
 
-        <div className="glass rounded-3xl p-6">
-          <p className="text-sm font-medium">{t("admin.topBooks")}</p>
-          <div className="mt-4 h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={bookCounts} dataKey="value" nameKey="name" outerRadius={70} label>
-                  {bookCounts.map((_, i) => (
-                    <Cell key={i} fill={colors[i % colors.length]} />
-                  ))}
-                </Pie>
-                <RTooltip />
-              </PieChart>
-            </ResponsiveContainer>
+          <div className="glass rounded-3xl p-6">
+            <p className="text-sm font-medium">{t("admin.topBooks")}</p>
+            <div className="mt-4 h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={bookCounts} dataKey="value" nameKey="name" outerRadius={70} label>
+                    {bookCounts.map((_, i) => (
+                      <Cell key={i} fill={colors[i % colors.length]} />
+                    ))}
+                  </Pie>
+                  <RTooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-        </div>
 
-        <div className="glass rounded-3xl p-6 lg:col-span-2">
-          <p className="text-sm font-medium">{t("admin.deptComparison")}</p>
-          <div className="mt-4 h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={deptData}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                <XAxis dataKey="name" fontSize={11} />
-                <YAxis fontSize={12} />
-                <RTooltip />
-                <Bar dataKey="pages" radius={[6, 6, 0, 0]} fill="#10B981" />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="glass rounded-3xl p-6 lg:col-span-2">
+            <p className="text-sm font-medium">{t("admin.deptComparison")}</p>
+            <div className="mt-4 h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={deptData}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                  <XAxis dataKey="name" fontSize={11} />
+                  <YAxis fontSize={12} />
+                  <RTooltip />
+                  <Bar dataKey="pages" radius={[6, 6, 0, 0]} fill="#10B981" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
       </div>

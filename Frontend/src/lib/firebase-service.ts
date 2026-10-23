@@ -3,6 +3,7 @@ import {
   arrayUnion,
   doc,
   getDoc,
+  increment,
   runTransaction,
   setDoc,
   updateDoc,
@@ -23,6 +24,7 @@ import {
   handleFirestoreError,
   OperationType,
 } from "./firebase";
+import { updateProfile } from "firebase/auth";
 import * as demo from "./demo-data";
 import type {
   AuditEntry,
@@ -79,6 +81,174 @@ export async function fsGetUser(uid: string): Promise<User | null> {
   }
 }
 
+export function fsSubscribeUserPoints(
+  uid: string,
+  onPoints: (points: number) => void,
+  onError: (error: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    doc(db, "users", uid),
+    (snapshot) => {
+      if (!snapshot.exists()) {
+        onError(new Error(`User profile not found: users/${uid}`));
+        return;
+      }
+      const data = snapshot.data();
+      onPoints(typeof data["points"] === "number" ? data["points"] : 0);
+    },
+    onError,
+  );
+}
+
+export function fsSubscribeUserReadingLogs(
+  uid: string,
+  onLogs: (logs: ReadingLog[]) => void,
+  onError: (error: Error) => void,
+): Unsubscribe {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    onError(new Error("You can only view your own reading history."));
+    return () => {};
+  }
+
+  return onSnapshot(
+    query(collection(db, "reading_logs"), where("userId", "==", uid)),
+    (snapshot) => {
+      const logs = snapshot.docs
+        .map((logDoc) => ({ ...logDoc.data(), id: logDoc.id }) as ReadingLog)
+        .filter((log) => log.userId === uid)
+        .sort((a, b) => b.date.localeCompare(a.date));
+      onLogs(logs);
+    },
+    onError,
+  );
+}
+
+export interface LeaderboardStaff {
+  id: string;
+  name: string;
+  departmentId: string;
+  points: number;
+}
+
+export interface AdminStaffMember {
+  id: string;
+  name: string;
+  email: string;
+  departmentId: string;
+  points: number;
+}
+
+export function fsSubscribeAdminStaff(
+  onStaff: (staff: AdminStaffMember[]) => void,
+  onError: (error: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    collection(db, "users"),
+    (snapshot) => {
+      const staff = snapshot.docs
+        .filter((userDoc) => userDoc.data()["role"] === "staff")
+        .map((userDoc) => {
+          const data = userDoc.data();
+          return {
+            id: userDoc.id,
+            name: typeof data["name"] === "string" ? data["name"] : "",
+            email: typeof data["email"] === "string" ? data["email"] : "",
+            departmentId:
+              typeof data["departmentId"] === "string" ? data["departmentId"] : "",
+            points:
+              typeof data["points"] === "number" && Number.isFinite(data["points"])
+                ? data["points"]
+                : 0,
+          };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+      onStaff(staff);
+    },
+    onError,
+  );
+}
+
+export async function fsGetStaffReadingLogs(uid: string): Promise<ReadingLog[]> {
+  const actor = auth.currentUser;
+  if (!actor || !(await fsGetAdminRole(actor.uid))) {
+    throw new Error("Administrator access is required to read staff reading history.");
+  }
+
+  try {
+    const snapshot = await getDocs(
+      query(collection(db, "reading_logs"), where("userId", "==", uid)),
+    );
+    return snapshot.docs.map(
+      (logDoc) => ({ ...logDoc.data(), id: logDoc.id }) as ReadingLog,
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, `reading_logs (userId: ${uid})`);
+  }
+}
+
+export async function fsResetUserPoints(uid: string): Promise<void> {
+  const actor = auth.currentUser;
+  if (!actor || !(await fsGetAdminRole(actor.uid))) {
+    throw new Error("Administrator access is required to reset points.");
+  }
+
+  const path = `users/${uid}`;
+  try {
+    await updateDoc(doc(db, "users", uid), { points: 0 });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export function fsSubscribeLeaderboard(
+  onStaff: (staff: LeaderboardStaff[]) => void,
+  onError: (error: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    collection(db, "users"),
+    (snapshot) => {
+      const leaderboard = snapshot.docs
+        .map((userDoc) => {
+          const data = userDoc.data();
+          return {
+            id: userDoc.id,
+            name: typeof data["name"] === "string" ? data["name"] : "",
+            departmentId:
+              typeof data["departmentId"] === "string" ? data["departmentId"] : "",
+            points:
+              typeof data["points"] === "number" && Number.isFinite(data["points"])
+                ? data["points"]
+                : 0,
+          };
+        })
+        .sort((a, b) => b.points - a.points)
+        .slice(0, 10);
+      onStaff(leaderboard);
+    },
+    onError,
+  );
+}
+
+export async function fsAwardPoints(
+  uid: string,
+  activity: "dailyCheckIn" | "sevenDayStreak" | "bookCompletion",
+): Promise<number> {
+  const pointsByActivity = {
+    dailyCheckIn: 10,
+    sevenDayStreak: 50,
+    bookCompletion: 100,
+  } as const;
+  const path = `users/${uid}`;
+  try {
+    await updateDoc(doc(db, "users", uid), {
+      points: increment(pointsByActivity[activity]),
+    });
+    return pointsByActivity[activity];
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function fsCreateInvitedUser(input: {
   name: string;
   email: string;
@@ -106,6 +276,7 @@ export async function fsCreateInvitedUser(input: {
       departmentId: input.departmentId,
       active: true,
       streak: 0,
+      currentStreak: 0,
       points: 0,
       level: 1,
       language: "mr",
@@ -296,7 +467,17 @@ export function subscribeToFirestore(
     unsubscribeTodayLogs();
     window.clearInterval(dayRolloverTimer);
   });
-  if (isAdmin) bind<User>("users", "staff", (data, id) => ({ ...data, id }) as User);
+  if (isAdmin)
+    bind<User>(
+      "users",
+      "staff",
+      (data, id) => ({
+        ...data,
+        id,
+        currentStreak: data.currentStreak ?? data.streak ?? 0,
+        streak: data.currentStreak ?? data.streak ?? 0,
+      }) as User,
+    );
   if (isAdmin) bind<AuditEntry>("auditLogs", "audit", (data, id) => ({ ...data, id }) as AuditEntry);
 
   const userActivityUnsub = onSnapshot(
@@ -351,7 +532,10 @@ function subscribeToTodayLogs(
     ),
     (snapshot) => {
       const pagesRead = snapshot.docs.reduce(
-        (total, logDocument) => total + Number(logDocument.data()["pages"] ?? 0),
+        (total, logDocument) => {
+          const data = logDocument.data();
+          return data["date"] === date ? total + Number(data["pages"] ?? 0) : total;
+        },
         0,
       );
       updateState({ todayPagesRead: pagesRead });
@@ -402,6 +586,24 @@ export async function fsCheckIn(
         );
       }
 
+      let currentStreak = 1;
+      for (let daysBack = 1; ; daysBack += 1) {
+        const previousLogRef = doc(
+          db,
+          "reading_logs",
+          `${user.uid}_${getDateInIndia(-daysBack)}`,
+        );
+        const previousLogSnapshot = await transaction.get(previousLogRef);
+        if (
+          !previousLogSnapshot.exists() ||
+          previousLogSnapshot.data()["userId"] !== user.uid ||
+          previousLogSnapshot.data()["date"] !== getDateInIndia(-daysBack)
+        ) {
+          break;
+        }
+        currentStreak += 1;
+      }
+
       const log: ReadingLog = {
         id: logId,
         userId: user.uid,
@@ -417,6 +619,11 @@ export async function fsCheckIn(
       transaction.set(logRef, log);
       transaction.update(shelfRef, {
         currentPage: currentPage,
+      });
+      transaction.update(userRef, {
+        currentStreak,
+        streak: currentStreak,
+        points: increment(10),
       });
       return log;
     });
@@ -612,6 +819,51 @@ export async function fsUpdateUser(id: string, patch: Partial<User>) {
     await updateDoc(doc(db, "users", id), patch);
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function fsUpdateUserProfile(
+  id: string,
+  profile: { name: string; phone: string; departmentId?: string },
+): Promise<void> {
+  const actor = auth.currentUser;
+  if (!actor) throw new Error("Sign in before updating a profile.");
+
+  const isSelf = actor.uid === id;
+  const actorRole = isSelf ? null : await fsGetAdminRole(actor.uid);
+  if (!isSelf && !actorRole) {
+    throw new Error("Administrator access is required to edit another user's profile.");
+  }
+
+  const name = profile.name.trim();
+  const phone = profile.phone.trim();
+  if (!name) throw new Error("Name cannot be empty.");
+
+  const patch: { name: string; phone: string; departmentId?: string } = { name, phone };
+  if (!isSelf) {
+    if (!profile.departmentId) throw new Error("Select a department for this staff member.");
+    patch.departmentId = profile.departmentId;
+  } else if (profile.departmentId !== undefined) {
+    throw new Error("You cannot change your own department.");
+  }
+
+  const path = `users/${id}`;
+  const previousDisplayName = actor.displayName;
+  if (isSelf) {
+    await updateProfile(actor, { displayName: name });
+  }
+
+  try {
+    await updateDoc(doc(db, "users", id), patch);
+  } catch (error) {
+    if (isSelf) {
+      await updateProfile(actor, { displayName: previousDisplayName ?? "" }).catch(
+        (rollbackError: unknown) => {
+          console.error("Unable to restore Firebase Auth display name after profile update failed:", rollbackError);
+        },
+      );
+    }
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 

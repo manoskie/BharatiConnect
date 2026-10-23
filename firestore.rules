@@ -53,21 +53,74 @@ service cloud.firestore {
 
     match /admins/{userId} {
       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow create, update, delete: if isOwner();
+      allow create: if isOwner()
+        && request.resource.data.keys().hasOnly(['role'])
+        && request.resource.data.role == 'admin'
+        && getAfter(/databases/$(database)/documents/users/$(userId)).data.role == 'admin'
+        && getAfter(/databases/$(database)/documents/users/$(userId)).data.active == true;
+      allow update, delete: if isOwner();
     }
 
     match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      // Allow all logged-in staff members to read user profiles (needed for Leaderboard)
+      allow read: if request.auth != null;
+
+      // Account invitations create the profile and matching admin record atomically.
       allow create: if isAdmin()
-        && (request.resource.data.role == 'staff'
-          || (isOwner() && request.resource.data.role == 'admin'))
-        && request.resource.data.active is bool;
-      allow update: if isOwner()
-        || (isAdmin() && resource.data.role == 'staff')
-        || (isActiveUser()
-          && request.auth.uid == userId
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['language', 'reminderTime']));
-      allow delete: if isOwner();
+        && request.resource.data.id == userId
+        && request.resource.data.active == true
+        && (
+          request.resource.data.role == 'staff'
+          || (isOwner()
+            && request.resource.data.role == 'admin'
+            && existsAfter(/databases/$(database)/documents/admins/$(userId))
+            && getAfter(/databases/$(database)/documents/admins/$(userId)).data.role == 'admin')
+        );
+
+      // Allow users to update their own profile, and administrators to manage staff points/status.
+      allow update: if (request.auth != null && request.auth.uid == userId)
+        || (isAdmin()
+          && resource.data.role == 'staff'
+          && request.resource.data.role == 'staff'
+          && (
+            (request.resource.data.points == 0
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points']))
+            || (request.resource.data.active is bool
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']))
+            || (request.resource.data.name is string
+              && request.resource.data.name.size() > 0
+              && request.resource.data.phone is string
+              && request.resource.data.departmentId is string
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'name', 'phone', 'departmentId'
+              ]))
+          ))
+        || (isOwner()
+          && resource.data.role == 'admin'
+          && request.resource.data.role == 'admin'
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.phone is string
+          && request.resource.data.departmentId is string
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'phone', 'departmentId'
+          ]))
+        || (isOwner()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+          && request.resource.data.role in ['staff', 'admin']
+          && (
+            (request.resource.data.role == 'admin'
+              && existsAfter(/databases/$(database)/documents/admins/$(userId))
+              && getAfter(/databases/$(database)/documents/admins/$(userId)).data.role == 'admin')
+            || (request.resource.data.role == 'staff'
+              && !existsAfter(/databases/$(database)/documents/admins/$(userId)))
+          ))
+        || (isOwner()
+          && resource.data.role == 'admin'
+          && request.resource.data.role == 'admin'
+          && request.resource.data.active == false
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
+          && !existsAfter(/databases/$(database)/documents/admins/$(userId)));
     }
 
     match /departments/{departmentId} {
@@ -105,23 +158,10 @@ service cloud.firestore {
     }
 
     match /reading_logs/{logId} {
-      allow read: if request.auth != null
-        && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if request.auth != null
-        && (logId.matches('^' + request.auth.uid + '.*$')
-          || request.resource.data.userId == request.auth.uid);
-      allow update: if (request.auth != null
-        && resource.data.userId == request.auth.uid
-        && (logId.matches('^' + request.auth.uid + '.*$')
-          || request.resource.data.userId == request.auth.uid))
-        || (isAdmin()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['proofOutcome', 'proofReviewReason'])
-          && request.resource.data.proofOutcome in ['accepted', 'retake', 'needs_review']
-          && (!('proofReviewReason' in request.resource.data)
-            || request.resource.data.proofReviewReason is string
-              && request.resource.data.proofReviewReason.size() <= 280));
-      allow delete: if isAdmin();
-    }
+  allow read: if request.auth != null
+    && (resource.data.userId == request.auth.uid || isAdmin());
+  allow write: if request.auth != null && logId.matches(request.auth.uid + '.*');
+}
 
     match /challenges/{challengeId} {
       allow read: if isActiveUser();

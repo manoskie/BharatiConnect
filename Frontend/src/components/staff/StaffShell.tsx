@@ -1,6 +1,6 @@
 import { Link, useRouterState, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { BookOpen, Home, Newspaper, Trophy, User as UserIcon } from "lucide-react";
+import { BookOpen, Home, Shield, Trophy, User as UserIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { LangThemeToggle } from "@/components/LangThemeToggle";
@@ -14,13 +14,12 @@ const tabs = [
   { to: "/", icon: Home, key: "nav.home" },
   { to: "/reading", icon: BookOpen, key: "nav.reading" },
   { to: "/compete", icon: Trophy, key: "nav.compete" },
-  { to: "/content", icon: Newspaper, key: "nav.content" },
   { to: "/profile", icon: UserIcon, key: "nav.profile" },
 ] as const;
 
 export function StaffShell({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
-  const { authReady, sessionUser } = useAppState();
+  const { authReady, sessionUser, adminAuthed, adminUser } = useAppState();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
@@ -33,6 +32,11 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
   if (!authReady || !sessionUser) {
     return null;
   }
+
+  const visibleTabs =
+    adminAuthed && (adminUser?.role === "admin" || adminUser?.role === "owner")
+      ? [...tabs, { to: "/admin" as const, icon: Shield, key: "nav.admin" }]
+      : tabs;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-brand-soft/60 via-background to-background">
@@ -54,7 +58,7 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
 
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-border/60 bg-background/85 backdrop-blur-xl">
         <div className="mx-auto flex max-w-2xl">
-          {tabs.map(({ to, icon: Icon, key }) => {
+          {visibleTabs.map(({ to, icon: Icon, key }) => {
             const active = to === "/" ? pathname === "/" : pathname.startsWith(to);
             return (
               <Link

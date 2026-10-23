@@ -1,8 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { motion } from "motion/react";
-import { CheckCircle2, ChevronRight, Circle, Flame, Sparkles, Trophy } from "lucide-react";
+import { CheckCircle2, ChevronRight, Circle, Flame, Trophy } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { StaffShell } from "@/components/staff/StaffShell";
+import { GamificationCard } from "@/components/staff/GamificationCard";
+import { Leaderboard } from "@/components/staff/Leaderboard";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useAppState } from "@/lib/store";
@@ -44,28 +45,17 @@ function Home() {
           <p className="text-sm text-muted-foreground">{t("home.subtitle")}</p>
         </div>
 
-        <div className="glass relative overflow-hidden rounded-3xl p-6 text-center">
-          <div className="absolute -top-16 -right-10 size-40 rounded-full bg-streak/25 blur-3xl" />
-          <motion.div
-            initial={{ scale: 0.7, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ type: "spring", stiffness: 200, damping: 14 }}
-            className="relative flex items-center justify-center gap-3"
-          >
-            <motion.span
-              animate={{ scale: [1, 1.12, 1] }}
-              transition={{ repeat: Infinity, duration: 2.4 }}
-              className="text-5xl"
-            >
-              🔥
-            </motion.span>
-            <span className="text-6xl font-bold tabular-nums text-streak-foreground dark:text-streak">
-              {user?.streak ?? 0}
-            </span>
-          </motion.div>
-          <p className="mt-1 text-sm font-medium text-muted-foreground">{t("home.streak")}</p>
+        {user && (
+          <GamificationCard
+            uid={user.id}
+            initialPoints={user.points}
+            streak={user.streak}
+          />
+        )}
+        <Leaderboard />
 
-          <div className="mt-4 flex justify-center">
+        <div className="glass rounded-3xl p-5">
+          <div className="flex justify-center">
             <span
               className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${
                 todayLogged
@@ -78,7 +68,7 @@ function Home() {
             </span>
           </div>
 
-          <Button asChild size="lg" className="mt-5 h-14 w-full rounded-2xl text-base shadow-lg">
+          <Button asChild size="lg" className="mt-4 h-14 w-full rounded-2xl text-base shadow-lg">
             <Link to="/reading">
               <Flame className="size-5" /> {t("home.quickCheckin")}
             </Link>
@@ -102,22 +92,9 @@ function Home() {
           </p>
         </Link>}
 
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <div className="glass rounded-3xl p-5">
-            <p className="text-xs text-muted-foreground">{t("common.points")}</p>
-            <p className="text-3xl font-bold tabular-nums">{user?.points ?? 0}</p>
-          </div>
-          <div className="glass rounded-3xl p-5">
-            <p className="text-xs text-muted-foreground">{t("home.level")}</p>
-            <p className="flex items-center gap-2 text-3xl font-bold">
-              <Sparkles className="size-5 text-primary" />
-              {user?.level ?? 1}
-            </p>
-          </div>
-          <div className="glass rounded-3xl p-5">
-            <p className="text-xs text-muted-foreground">{t("home.pagesReadToday")}</p>
-            <p className="text-3xl font-bold tabular-nums">{todayPagesRead}</p>
-          </div>
+        <div className="glass rounded-3xl p-5">
+          <p className="text-xs text-muted-foreground">{t("home.pagesReadToday")}</p>
+          <p className="text-3xl font-bold tabular-nums">{todayPagesRead}</p>
         </div>
 
         <div className="space-y-2">

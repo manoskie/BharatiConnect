@@ -9,6 +9,7 @@ import {
   fsChangeUserRole,
   subscribeToFirestore,
   fsCheckIn,
+  fsGetStaffReadingLogs,
   fsSaveBook,
   fsUpdateBook,
   fsSaveNotice,
@@ -25,6 +26,7 @@ import {
   fsDeleteHoliday,
   fsUpdateSettings,
   fsUpdateUser,
+  fsUpdateUserProfile,
   fsSaveDepartment,
   fsDeleteDepartment,
   fsUpdateReadingLog,
@@ -87,6 +89,16 @@ export interface AppState {
 
 export function normalizeUser(raw: any): User {
   if (!raw) return demo.currentUser;
+  const createdAt =
+    raw.joinedAt ?? raw.createdAt ?? raw.createdTimestamp ?? raw.created_at;
+  let joinedAt = "";
+  if (typeof createdAt === "string" || typeof createdAt === "number") {
+    const date = new Date(createdAt);
+    if (!Number.isNaN(date.getTime())) joinedAt = date.toISOString().slice(0, 10);
+  } else if (createdAt && typeof createdAt.toDate === "function") {
+    const date = createdAt.toDate() as Date;
+    if (!Number.isNaN(date.getTime())) joinedAt = date.toISOString().slice(0, 10);
+  }
   return {
     id: String(raw.id || raw._id || ""),
     name: raw.name || "Member",
@@ -96,14 +108,13 @@ export function normalizeUser(raw: any): User {
     departmentId: String(raw.departmentId?._id || raw.departmentId || "d1"),
     active: raw.active !== false,
     streak: raw.currentStreak ?? raw.streak ?? 0,
+    currentStreak: raw.currentStreak ?? raw.streak ?? 0,
     points: raw.points ?? 0,
     level:
       typeof raw.level === "number" ? raw.level : raw.points ? Math.floor(raw.points / 100) + 1 : 1,
     language: raw.language === "en" ? "en" : "mr",
     reminderTime: raw.reminderTime || "20:00",
-    joinedAt: raw.createdAt
-      ? new Date(raw.createdAt).toISOString().slice(0, 10)
-      : demo.iso(new Date()),
+    joinedAt,
     avatarColor: raw.avatarColor || "#6366f1",
   };
 }
@@ -162,7 +173,7 @@ function todayInKolkata() {
   }).format(new Date());
 }
 
-function calculateCurrentStreak(logs: ReadingLog[]) {
+export function calculateCurrentStreak(logs: ReadingLog[]) {
   const dates = new Set(logs.map((log) => log.date));
   const today = todayInKolkata();
   const [year, month, day] = today.split("-").map(Number);
@@ -177,6 +188,12 @@ function calculateCurrentStreak(logs: ReadingLog[]) {
     cursor -= 86_400_000;
   }
   return streak;
+}
+
+function calculatePagesReadToday(logs: ReadingLog[], userId: string, today: string) {
+  return logs
+    .filter((log) => log.userId === userId && log.date === today)
+    .reduce((total, log) => total + log.pages, 0);
 }
 
 export const store = {
@@ -231,6 +248,22 @@ export const actions = {
     await fsUpdateUser(state.sessionUser.id, { reminderTime: time });
     set({ sessionUser: { ...state.sessionUser, reminderTime: time } });
   },
+  async updateOwnProfile(profile: { name: string; phone: string }) {
+    const user = state.sessionUser;
+    if (!user) throw new Error("Sign in before updating your profile.");
+    await fsUpdateUserProfile(user.id, profile);
+    const updatedUser = { ...user, name: profile.name.trim(), phone: profile.phone.trim() };
+    set({
+      sessionUser: updatedUser,
+      ...(state.staff.some((staffMember) => staffMember.id === user.id)
+        ? {
+            staff: state.staff.map((staffMember) =>
+              staffMember.id === user.id ? updatedUser : staffMember,
+            ),
+          }
+        : {}),
+    });
+  },
   login(user: User) {
     const normalized = normalizeUser(user);
     set({ sessionUser: normalized });
@@ -276,11 +309,11 @@ export const actions = {
             }
           : b,
       ),
-      sessionUser: { ...user, streak },
+      sessionUser: { ...user, streak, currentStreak: streak },
       todayLogged: true,
-      todayPagesRead: log.pages,
+      todayPagesRead: calculatePagesReadToday(logs, user.id, log.date),
       dayStates: { ...state.dayStates, [log.date]: "logged" },
-      lastCelebration: { points: 0, streak },
+      lastCelebration: { points: 10, streak },
     });
     return log;
   },
@@ -421,6 +454,35 @@ export const actions = {
     );
   },
 
+  async updateStaffProfile(
+    id: string,
+    profile: { name: string; phone: string; departmentId: string },
+  ) {
+    const actorRole = state.adminUser?.role;
+    if (!actorRole || (actorRole !== "admin" && actorRole !== "owner")) {
+      throw new Error("Administrator access is required to edit staff profiles.");
+    }
+    const target = state.staff.find((staffMember) => staffMember.id === id);
+    if (!target) throw new Error("Staff member not found.");
+    if (target.role !== "staff" && actorRole !== "owner") {
+      throw new Error("Only the owner can edit administrator profiles.");
+    }
+
+    await fsUpdateUserProfile(id, profile);
+    const updatedUser = {
+      ...target,
+      name: profile.name.trim(),
+      phone: profile.phone.trim(),
+      departmentId: profile.departmentId,
+    };
+    set({
+      staff: state.staff.map((staffMember) => (staffMember.id === id ? updatedUser : staffMember)),
+      ...(state.sessionUser?.id === id ? { sessionUser: updatedUser } : {}),
+      ...(state.adminUser?.id === id ? { adminUser: updatedUser } : {}),
+    });
+    logAudit("staff.profile", updatedUser.name);
+  },
+
   async setStaffRole(id: string, role: Role) {
     const target = state.staff.find((s) => s.id === id);
     if (!target || (role !== "staff" && role !== "admin")) return;
@@ -522,9 +584,22 @@ export const actions = {
   },
 
   async addHoliday(entry: Omit<HolidayEntry, "id">) {
-    const newHoliday = { ...entry, id: uid() };
+    const newHoliday: HolidayEntry = {
+      ...entry,
+      id: entry.type === "holiday" && !entry.userId ? entry.date : uid(),
+      title: entry.title ?? entry.labelEn,
+      createdBy: entry.createdBy ?? state.sessionUser?.id ?? "",
+      createdAt: entry.createdAt ?? new Date().toISOString(),
+    };
     await fsSaveHoliday(newHoliday);
-    set({ holidays: upsertById(state.holidays, newHoliday) });
+    const holidays =
+      newHoliday.type === "holiday" && !newHoliday.userId
+        ? state.holidays.filter(
+            (holiday) =>
+              !(holiday.date === newHoliday.date && holiday.type === "holiday" && !holiday.userId),
+          )
+        : state.holidays;
+    set({ holidays: upsertById(holidays, newHoliday) });
     logAudit(`calendar.${entry.type}`, entry.labelEn);
   },
 
@@ -652,7 +727,7 @@ export const actions = {
             const normalized = normalizeUser({
               ...profile,
               id: firebaseUser.uid,
-              name: firebaseUser.displayName || profile.name,
+              name: profile.name || firebaseUser.displayName,
               email: firebaseUser.email || profile.email,
               role: adminRole ?? "staff",
             });
@@ -685,15 +760,18 @@ export const actions = {
                   const logs = partial["logs"] as ReadingLog[];
                   const today = todayInKolkata();
                   const userLogs = logs.filter((log) => log.userId === firebaseUser.uid);
+                  const currentStreak = calculateCurrentStreak(userLogs);
                   set((current) => ({
                     ...partial,
                     sessionUser: current.sessionUser
-                      ? { ...current.sessionUser, streak: calculateCurrentStreak(userLogs) }
+                      ? {
+                          ...current.sessionUser,
+                          streak: currentStreak,
+                          currentStreak,
+                        }
                       : null,
                     todayLogged: userLogs.some((log) => log.date === today),
-                    todayPagesRead: userLogs
-                      .filter((log) => log.date === today)
-                      .reduce((total, log) => total + log.pages, 0),
+                    todayPagesRead: calculatePagesReadToday(userLogs, firebaseUser.uid, today),
                     dayStates: Object.fromEntries(userLogs.map((log) => [log.date, "logged"])),
                   }));
                   return;

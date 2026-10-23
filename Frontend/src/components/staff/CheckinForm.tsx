@@ -97,7 +97,8 @@ export function CheckinForm() {
 
       <div className="space-y-2">
         <Label htmlFor="note">
-          {t("reading.note")} <span className="text-muted-foreground">({note.length}/280)</span>
+          {t("reading.reflectionPrompt")}{" "}
+          <span className="text-muted-foreground">({note.length}/280)</span>
         </Label>
         <Textarea
           id="note"

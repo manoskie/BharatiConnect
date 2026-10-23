@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Search, UserPlus } from "lucide-react";
+import { Pencil, Search, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -30,7 +31,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { actions, useAppState } from "@/lib/store";
+import { fsGetStaffReadingLogs } from "@/lib/firebase-service";
+import { actions, calculateCurrentStreak, useAppState } from "@/lib/store";
 import type { User } from "@/lib/types";
 
 export const Route = createFileRoute("/admin/staff")({
@@ -52,9 +54,49 @@ function StaffAdmin() {
   const [dept, setDept] = useState("all");
   const [status, setStatus] = useState("all");
   const [detail, setDetail] = useState<User | null>(null);
+  const [editUser, setEditUser] = useState<User | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", phone: "", departmentId: "" });
+  const [savingEdit, setSavingEdit] = useState(false);
   const [invite, setInvite] = useState<string | null>(null);
   const [inviting, setInviting] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", phone: "", departmentId: "" });
+  const [computedStreaks, setComputedStreaks] = useState<Record<string, number>>({});
+  const staffIds = staff.map((member) => member.id).sort().join("|");
+
+  useEffect(() => {
+    const userIds = staffIds ? staffIds.split("|") : [];
+    let cancelled = false;
+
+    if (userIds.length === 0) {
+      setComputedStreaks({});
+      return;
+    }
+
+    void Promise.all(
+      userIds.map(async (userId) => {
+        try {
+          const userLogs = await fsGetStaffReadingLogs(userId);
+          return [userId, calculateCurrentStreak(userLogs)] as const;
+        } catch (error) {
+          console.error(`Unable to calculate streak from logs for staff account ${userId}:`, error);
+          return [userId, null] as const;
+        }
+      }),
+    ).then((results) => {
+      if (cancelled) return;
+      const successful = results.filter(
+        (result): result is readonly [string, number] => result[1] !== null,
+      );
+      setComputedStreaks(Object.fromEntries(successful));
+      if (successful.length !== results.length) {
+        toast.error("Some staff streaks could not be calculated from reading history.");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [staffIds]);
 
   const rows = staff.filter(
     (s) =>
@@ -199,7 +241,12 @@ function StaffAdmin() {
                   <TableCell className="font-medium">{s.name}</TableCell>
                   <TableCell>{deptName(s.departmentId)}</TableCell>
                   <TableCell className="capitalize">{s.role}</TableCell>
-                  <TableCell className="text-right tabular-nums">{s.streak}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {(s.currentStreak ?? s.streak ?? s.streakCount ?? 0) > 0
+                      ? (s.currentStreak ?? s.streak ?? s.streakCount ?? 0)
+                      : (computedStreaks[s.id] ??
+                        calculateCurrentStreak(logs.filter((log) => log.userId === s.id)))}
+                  </TableCell>
                   <TableCell className="text-right tabular-nums">{s.points}</TableCell>
                   <TableCell>
                     <span
@@ -211,19 +258,39 @@ function StaffAdmin() {
                     </span>
                   </TableCell>
                   <TableCell>
-                    {(s.role === "staff" || adminUser?.role === "owner") && s.id !== sessionUser?.id && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void actions.toggleStaffActive(s.id).catch((error: unknown) => {
-                            toast.error(error instanceof Error ? error.message : "Unable to update this account.");
-                          });
-                        }}
-                      >
-                        {s.active ? t("admin.deactivate") : t("admin.reactivate")}
-                      </Button>
+                    {(s.role === "staff" ||
+                      (s.role === "admin" && adminUser?.role === "owner")) &&
+                      s.id !== sessionUser?.id && (
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditUser(s);
+                            setEditForm({
+                              name: s.name,
+                              phone: s.phone,
+                              departmentId: s.departmentId,
+                            });
+                          }}
+                        >
+                          <Pencil className="size-3.5" />
+                          {t("admin.editStaffProfile")}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void actions.toggleStaffActive(s.id).catch((error: unknown) => {
+                              toast.error(error instanceof Error ? error.message : "Unable to update this account.");
+                            });
+                          }}
+                        >
+                          {s.active ? t("admin.deactivate") : t("admin.reactivate")}
+                        </Button>
+                      </div>
                     )}
                   </TableCell>
                 </TableRow>
@@ -280,6 +347,114 @@ function StaffAdmin() {
               </div>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={editUser !== null}
+        onOpenChange={(open) => {
+          if (!open && !savingEdit) setEditUser(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("admin.editStaffProfile")}</DialogTitle>
+            <DialogDescription>{editUser?.email}</DialogDescription>
+          </DialogHeader>
+          {editUser && (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-staff-name">{t("profile.name")}</Label>
+                <Input
+                  id="edit-staff-name"
+                  value={editForm.name}
+                  maxLength={100}
+                  onChange={(event) =>
+                    setEditForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-staff-email">{t("profile.email")}</Label>
+                <Input
+                  id="edit-staff-email"
+                  value={editUser.email}
+                  readOnly
+                  aria-readonly="true"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-staff-phone">{t("profile.phone")}</Label>
+                <Input
+                  id="edit-staff-phone"
+                  type="tel"
+                  value={editForm.phone}
+                  maxLength={30}
+                  onChange={(event) =>
+                    setEditForm((current) => ({ ...current, phone: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-staff-department">{t("profile.departmentLabel")}</Label>
+                <Select
+                  value={editForm.departmentId}
+                  onValueChange={(departmentId) =>
+                    setEditForm((current) => ({ ...current, departmentId }))
+                  }
+                >
+                  <SelectTrigger id="edit-staff-department">
+                    <SelectValue placeholder={t("profile.departmentLabel")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {departments.map((department) => (
+                      <SelectItem key={department.id} value={department.id}>
+                        {i18n.language === "mr" ? department.nameMr : department.nameEn}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              disabled={
+                savingEdit ||
+                !editForm.name.trim() ||
+                !editForm.departmentId ||
+                !editUser
+              }
+              onClick={async () => {
+                if (!editUser) return;
+                setSavingEdit(true);
+                try {
+                  await actions.updateStaffProfile(editUser.id, editForm);
+                  setDetail((current) =>
+                    current?.id === editUser.id
+                      ? {
+                          ...current,
+                          name: editForm.name.trim(),
+                          phone: editForm.phone.trim(),
+                          departmentId: editForm.departmentId,
+                        }
+                      : current,
+                  );
+                  setEditUser(null);
+                  toast.success(t("profile.profileUpdated"));
+                } catch (error) {
+                  toast.error(
+                    error instanceof Error ? error.message : t("profile.profileUpdateFailed"),
+                  );
+                } finally {
+                  setSavingEdit(false);
+                }
+              }}
+            >
+              {savingEdit ? t("common.loading") : t("common.save")}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </AdminShell>
