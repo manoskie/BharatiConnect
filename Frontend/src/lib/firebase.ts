@@ -27,6 +27,11 @@ const firebaseConfig = {
 export const firebaseConfigured = Object.values(firebaseConfig).every(
   (value) => typeof value === "string" && value.trim().length > 0,
 );
+if (!firebaseConfigured) {
+  console.warn(
+    "Firebase is not configured. Set the VITE_FIREBASE_* environment variables to enable Firebase features.",
+  );
+}
 export { firebaseConfig };
 const existingDefaultApp = getApps().find((candidate) => candidate.name === "[DEFAULT]");
 if (
