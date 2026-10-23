@@ -195,8 +195,12 @@ export interface UserActivity {
 export interface AuditEntry {
   id: string;
   actor: string;
+  actorUid?: string | undefined;
   action: string;
   target: string;
+  targetUid?: string | undefined;
+  change?: string | undefined;
+  timestamp?: string | Date | { toDate: () => Date } | undefined;
   at: string;
   before?: string | undefined;
   after?: string | undefined;

@@ -420,9 +420,10 @@ export const actions = {
   },
 
   async setSuggestionStatus(id: string, status: Suggestion["status"]) {
+    const suggestion = state.suggestions.find((item) => item.id === id);
     await fsUpdateSuggestion(id, status);
     set({ suggestions: state.suggestions.map((s) => (s.id === id ? { ...s, status } : s)) });
-    logAudit(`suggestion.${status}`, id);
+    logAudit(`suggestion.${status}`, suggestion?.title ?? id);
   },
 
   async markNotificationRead(id: string) {
@@ -480,10 +481,12 @@ export const actions = {
       ...(state.sessionUser?.id === id ? { sessionUser: updatedUser } : {}),
       ...(state.adminUser?.id === id ? { adminUser: updatedUser } : {}),
     });
-    logAudit("staff.profile", updatedUser.name);
   },
 
   async setStaffRole(id: string, role: Role) {
+    if (state.adminUser?.role !== "owner") {
+      throw new Error("Only the owner can change administrator access.");
+    }
     const target = state.staff.find((s) => s.id === id);
     if (!target || (role !== "staff" && role !== "admin")) return;
     await fsChangeUserRole(id, role);
@@ -604,9 +607,10 @@ export const actions = {
   },
 
   async removeHoliday(id: string) {
+    const holiday = state.holidays.find((entry) => entry.id === id);
     await fsDeleteHoliday(id);
     set({ holidays: state.holidays.filter((h) => h.id !== id) });
-    logAudit("calendar.delete", id);
+    logAudit("calendar.delete", holiday?.labelEn ?? id);
   },
 
   async updateSettings(patch: Partial<Settings>) {

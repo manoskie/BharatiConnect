@@ -12,6 +12,7 @@ import {
   onSnapshot,
   query,
   limit,
+  serverTimestamp,
   where,
   writeBatch,
   type Unsubscribe,
@@ -128,6 +129,7 @@ export interface LeaderboardStaff {
   name: string;
   departmentId: string;
   points: number;
+  streak: number;
 }
 
 export interface AdminStaffMember {
@@ -205,7 +207,11 @@ export function fsSubscribeLeaderboard(
   onError: (error: Error) => void,
 ): Unsubscribe {
   return onSnapshot(
-    collection(db, "users"),
+    query(
+      collection(db, "users"),
+      where("role", "==", "staff"),
+      where("active", "==", true),
+    ),
     (snapshot) => {
       const leaderboard = snapshot.docs
         .map((userDoc) => {
@@ -219,10 +225,15 @@ export function fsSubscribeLeaderboard(
               typeof data["points"] === "number" && Number.isFinite(data["points"])
                 ? data["points"]
                 : 0,
+            streak:
+              typeof data["currentStreak"] === "number" && Number.isFinite(data["currentStreak"])
+                ? data["currentStreak"]
+                : typeof data["streak"] === "number" && Number.isFinite(data["streak"])
+                  ? data["streak"]
+                  : 0,
           };
         })
-        .sort((a, b) => b.points - a.points)
-        .slice(0, 10);
+        .sort((a, b) => b.points - a.points || b.streak - a.streak || a.name.localeCompare(b.name));
       onStaff(leaderboard);
     },
     onError,
@@ -244,6 +255,24 @@ export async function fsAwardPoints(
       points: increment(pointsByActivity[activity]),
     });
     return pointsByActivity[activity];
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function fsSaveFcmToken(uid: string, token: string): Promise<void> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    throw new Error("You can only register a notification token for your own account.");
+  }
+  if (!token.trim()) {
+    throw new Error("A valid Firebase Cloud Messaging token is required.");
+  }
+
+  const path = `users/${uid}`;
+  try {
+    await updateDoc(doc(db, "users", uid), {
+      fcmTokens: arrayUnion(token),
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -849,12 +878,50 @@ export async function fsUpdateUserProfile(
 
   const path = `users/${id}`;
   const previousDisplayName = actor.displayName;
+  const previousProfile = await getDoc(doc(db, "users", id)).catch((error: unknown) => {
+    handleFirestoreError(error, OperationType.GET, path);
+  });
+  if (!previousProfile.exists()) {
+    throw new Error(`User profile not found: ${path}`);
+  }
+  const previousData = previousProfile.data();
+  const changes = [
+    ...(previousData["name"] !== name
+      ? [`Name: ${JSON.stringify(previousData["name"] ?? "")} → ${JSON.stringify(name)}`]
+      : []),
+    ...(previousData["phone"] !== phone
+      ? [`Phone: ${JSON.stringify(previousData["phone"] ?? "")} → ${JSON.stringify(phone)}`]
+      : []),
+    ...(patch.departmentId !== undefined &&
+    previousData["departmentId"] !== patch.departmentId
+      ? [
+          `Department: ${JSON.stringify(previousData["departmentId"] ?? "")} → ${JSON.stringify(patch.departmentId)}`,
+        ]
+      : []),
+  ];
+
   if (isSelf) {
     await updateProfile(actor, { displayName: name });
   }
 
   try {
-    await updateDoc(doc(db, "users", id), patch);
+    const batch = writeBatch(db);
+    batch.update(doc(db, "users", id), patch);
+    if (changes.length > 0) {
+      const auditId = crypto.randomUUID();
+      batch.set(doc(db, "auditLogs", auditId), {
+        id: auditId,
+        action: "profile.update",
+        actor: actor.displayName || actor.uid,
+        actorUid: actor.uid,
+        target: previousData["name"] || id,
+        targetUid: id,
+        change: changes.join("; "),
+        at: new Date().toISOString(),
+        timestamp: serverTimestamp(),
+      });
+    }
+    await batch.commit();
   } catch (error) {
     if (isSelf) {
       await updateProfile(actor, { displayName: previousDisplayName ?? "" }).catch(
@@ -916,8 +983,14 @@ export async function fsSaveTakeaway(takeaway: WeeklyTakeaway) {
 
 export async function fsSaveAuditEntry(entry: AuditEntry) {
   const path = `auditLogs/${entry.id}`;
+  const actor = auth.currentUser;
+  if (!actor) throw new Error("Sign in before writing an audit record.");
   try {
-    await setDoc(doc(db, "auditLogs", entry.id), entry);
+    await setDoc(doc(db, "auditLogs", entry.id), {
+      ...entry,
+      actorUid: actor.uid,
+      timestamp: serverTimestamp(),
+    });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }

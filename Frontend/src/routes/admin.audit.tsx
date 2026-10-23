@@ -12,6 +12,39 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAppState } from "@/lib/store";
+import type { AuditEntry } from "@/lib/types";
+
+function getAuditChange(entry: AuditEntry): string {
+  if (entry.change?.trim()) return entry.change;
+
+  if (entry.before || entry.after) {
+    return `${entry.before || "none"} → ${entry.after || "none"}`;
+  }
+
+  const target = entry.target.trim() || "item";
+  const quotedTarget = `"${target}"`;
+  const summaries: Record<string, string> = {
+    "department.create": `Created ${quotedTarget}`,
+    "department.delete": `Deleted ${quotedTarget}`,
+    "calendar.holiday": `Added ${quotedTarget} holiday`,
+    "calendar.leave": `Added leave for ${quotedTarget}`,
+    "calendar.delete": `Removed calendar entry ${quotedTarget}`,
+    "suggestion.approved": `Approved suggestion ${quotedTarget}`,
+    "suggestion.rejected": `Rejected suggestion ${quotedTarget}`,
+    "notice.publish": `Published notice ${quotedTarget}`,
+    "post.publish": `Published post ${quotedTarget}`,
+    "video.create": `Created video ${quotedTarget}`,
+    "challenge.create": `Created challenge ${quotedTarget}`,
+    "admin.create": `Created admin account for ${quotedTarget}`,
+    "staff.invite": `Invited ${quotedTarget}`,
+    "profile.update": `Updated profile for ${quotedTarget}`,
+  };
+  const summary = summaries[entry.action];
+  if (summary) return summary;
+
+  const action = entry.action.replace(/[._]/g, " ");
+  return `${action.charAt(0).toUpperCase()}${action.slice(1)}: ${target}`;
+}
 
 export const Route = createFileRoute("/admin/audit")({
   head: () => ({
@@ -36,6 +69,22 @@ function Audit() {
       a.actor.toLowerCase().includes(actor.toLowerCase()) &&
       a.action.toLowerCase().includes(action.toLowerCase()),
   );
+  const formatTimestamp = (value: AuditEntry["timestamp"] | AuditEntry["at"]) => {
+    const date =
+      value instanceof Date
+        ? value
+        : typeof value === "object" && value !== null && "toDate" in value
+          ? value.toDate()
+          : typeof value === "string"
+            ? new Date(value)
+            : null;
+    return date && !Number.isNaN(date.getTime())
+      ? new Intl.DateTimeFormat(undefined, {
+          dateStyle: "medium",
+          timeStyle: "medium",
+        }).format(date)
+      : "—";
+  };
 
   return (
     <AdminShell title={t("admin.audit")}>
@@ -72,19 +121,10 @@ function Audit() {
                   <code className="text-xs">{a.action}</code>
                 </TableCell>
                 <TableCell>{a.target}</TableCell>
-                <TableCell className="text-xs">
-                  {a.before || a.after ? (
-                    <span>
-                      <span className="text-destructive line-through">{a.before ?? "—"}</span> →{" "}
-                      <span className="text-success-foreground dark:text-success">
-                        {a.after ?? "—"}
-                      </span>
-                    </span>
-                  ) : (
-                    "—"
-                  )}
+                <TableCell className="text-xs">{getAuditChange(a)}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatTimestamp(a.timestamp ?? a.at)}
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{a.at}</TableCell>
               </TableRow>
             ))}
           </TableBody>

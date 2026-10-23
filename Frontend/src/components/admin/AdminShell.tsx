@@ -5,7 +5,6 @@ import {
   BookOpen,
   Building2,
   ChevronLeft,
-  ChevronRight,
   Gauge,
   LogOut,
   ScrollText,
@@ -37,7 +36,7 @@ export function AdminShell({ title, children }: { title: string; children: React
     <div className="flex min-h-screen bg-gradient-to-br from-brand-soft/40 via-background to-background">
       <aside
         className={cn(
-          "no-print sticky top-0 hidden h-screen shrink-0 flex-col border-r border-border/60 bg-card/60 backdrop-blur-xl md:flex",
+          "no-print sticky top-0 z-30 hidden h-screen shrink-0 flex-col overflow-visible border-r border-border/60 bg-card/60 backdrop-blur-xl md:flex",
           collapsed ? "w-16" : "w-64",
         )}
       >
@@ -69,12 +68,18 @@ export function AdminShell({ title, children }: { title: string; children: React
           <Button
             variant="ghost"
             size="icon"
-            className={cn("z-30 shrink-0", collapsed ? "size-10" : "ml-auto")}
+            className="absolute -right-3 top-5 z-50 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-md hover:text-foreground"
             onClick={() => setCollapsed(!collapsed)}
             aria-label="Toggle sidebar"
             aria-expanded={!collapsed}
+            title="Toggle sidebar"
           >
-            {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+            <ChevronLeft
+              className={cn(
+                "size-4 transition-transform duration-200",
+                collapsed ? "rotate-180" : "rotate-0",
+              )}
+            />
           </Button>
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto px-2 pb-4">

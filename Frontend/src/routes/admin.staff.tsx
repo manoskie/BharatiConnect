@@ -4,6 +4,16 @@ import { useTranslation } from "react-i18next";
 import { Pencil, Search, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/AdminShell";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -57,8 +67,11 @@ function StaffAdmin() {
   const [editUser, setEditUser] = useState<User | null>(null);
   const [editForm, setEditForm] = useState({ name: "", phone: "", departmentId: "" });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<User | null>(null);
+  const [removingStaff, setRemovingStaff] = useState(false);
   const [invite, setInvite] = useState<string | null>(null);
   const [inviting, setInviting] = useState(false);
+  const [updatingRoleFor, setUpdatingRoleFor] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", email: "", phone: "", departmentId: "" });
   const [computedStreaks, setComputedStreaks] = useState<Record<string, number>>({});
   const staffIds = staff.map((member) => member.id).sort().join("|");
@@ -162,18 +175,28 @@ function StaffAdmin() {
                   [
                     ["name", t("reading.title")],
                     ["email", t("auth.emailOrPhone")],
-                    ["phone", "Phone"],
                   ] as const
                 ).map(([field, label]) => (
                   <div key={field} className="space-y-1.5">
                     <Label>{field === "name" ? "Name" : label}</Label>
                     <Input
+                      type={field === "email" ? "email" : "text"}
                       className="h-11"
                       value={form[field]}
                       onChange={(e) => setForm({ ...form, [field]: e.target.value })}
                     />
                   </div>
                 ))}
+                <div className="space-y-1.5">
+                  <Label htmlFor="add-staff-phone">{t("profile.phone")}</Label>
+                  <Input
+                    id="add-staff-phone"
+                    type="tel"
+                    className="h-11"
+                    value={form.phone}
+                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  />
+                </div>
                 <div className="space-y-1.5">
                   <Label>{t("profile.departmentLabel")}</Label>
                   <Select
@@ -261,7 +284,42 @@ function StaffAdmin() {
                     {(s.role === "staff" ||
                       (s.role === "admin" && adminUser?.role === "owner")) &&
                       s.id !== sessionUser?.id && (
-                      <div className="flex justify-end gap-2">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {adminUser?.role === "owner" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={updatingRoleFor === s.id}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              const nextRole = s.role === "staff" ? "admin" : "staff";
+                              setUpdatingRoleFor(s.id);
+                              void actions
+                                .setStaffRole(s.id, nextRole)
+                                .then(() => {
+                                  toast.success(
+                                    nextRole === "admin"
+                                      ? `${s.name} is now an admin.`
+                                      : `${s.name}'s admin access was revoked.`,
+                                  );
+                                })
+                                .catch((error: unknown) => {
+                                  toast.error(
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Unable to update administrator access.",
+                                  );
+                                })
+                                .finally(() => setUpdatingRoleFor(null));
+                            }}
+                          >
+                            {updatingRoleFor === s.id
+                              ? t("common.loading")
+                              : s.role === "staff"
+                                ? "Make Admin"
+                                : "Revoke Admin"}
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="outline"
@@ -283,12 +341,19 @@ function StaffAdmin() {
                           variant="outline"
                           onClick={(e) => {
                             e.stopPropagation();
-                            void actions.toggleStaffActive(s.id).catch((error: unknown) => {
-                              toast.error(error instanceof Error ? error.message : "Unable to update this account.");
-                            });
+                            if (s.active) setRemoveTarget(s);
+                            else {
+                              void actions.toggleStaffActive(s.id).catch((error: unknown) => {
+                                toast.error(
+                                  error instanceof Error
+                                    ? error.message
+                                    : "Unable to update this account.",
+                                );
+                              });
+                            }
                           }}
                         >
-                          {s.active ? t("admin.deactivate") : t("admin.reactivate")}
+                          {s.active ? t("admin.removeStaff") : t("admin.reactivate")}
                         </Button>
                       </div>
                     )}
@@ -349,6 +414,52 @@ function StaffAdmin() {
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={removeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !removingStaff) setRemoveTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("admin.removeStaffTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("admin.removeStaffConfirmation", { name: removeTarget?.name ?? "" })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removingStaff}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={removingStaff}
+              onClick={(event) => {
+                event.preventDefault();
+                if (!removeTarget) return;
+                setRemovingStaff(true);
+                void actions
+                  .toggleStaffActive(removeTarget.id)
+                  .then(() => {
+                    toast.success(t("admin.staffRemoved"));
+                    setRemoveTarget(null);
+                  })
+                  .catch((error: unknown) => {
+                    toast.error(
+                      error instanceof Error
+                        ? error.message
+                        : t("admin.staffRemoveFailed"),
+                    );
+                  })
+                  .finally(() => setRemovingStaff(false));
+              }}
+            >
+              {removingStaff ? t("common.loading") : t("admin.removeStaff")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog
         open={editUser !== null}
